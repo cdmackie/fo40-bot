@@ -24,6 +24,10 @@ Devvit.configure({
 
 // ---------- Settings ----------
 
+// Installation-scoped: each subreddit that installs this app configures its
+// own webhook URL via the per-install settings page on Reddit. This lets
+// multiple subreddits (each with its own companion Discord server) install
+// the same app without sharing credentials.
 Devvit.addSettings([
   {
     type: "string",
@@ -32,7 +36,7 @@ Devvit.addSettings([
     helpText:
       "The webhook URL of the bridge channel in your Discord server. " +
       "Create it in Channel Settings → Integrations → Webhooks.",
-    scope: "app",
+    scope: "installation",
     isSecret: true,
   },
 ]);

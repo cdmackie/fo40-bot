@@ -45,7 +45,9 @@ Once approved:
 npx devvit install r/FriendsOver40
 ```
 
-Then go to `https://developers.reddit.com/apps/fo40-bridge/installations`, find the r/FriendsOver40 install, and set `discord_webhook_url` to the Discord webhook URL.
+Then **on Reddit**, go to `https://www.reddit.com/r/FriendsOver40/about/edit/community-app-settings` (or: subreddit mod tools → "Community apps" → fo40-bridge → settings) and paste the Discord webhook URL into the `discord_webhook_url` field.
+
+The setting is **installation-scoped**, so each subreddit that installs the app configures its own webhook URL independently. This lets the same app serve multiple sister subreddits (e.g. r/FriendsOver40 and r/FriendsOver50) — each with its own companion Discord server and webhook — without sharing credentials.
 
 ### Why publish (not upload)?
 

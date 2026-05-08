@@ -289,7 +289,9 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 
 **Purpose:** Mirror bans **one-way** from `r/FriendsOver40` to the Discord server. When a Reddit mod bans a user, that user is auto-banned on Discord (if they've linked their Reddit account). Discord-side bans do not propagate back to Reddit. Announcement mirroring is explicitly out of scope.
 
-**Architecture:** Reddit closed the script-app API path in late 2025 in favour of Devvit. Direct PRAW/asyncpraw access is no longer available. Instead, a companion Devvit app on r/FriendsOver40 (in `reddit_devvit/`) handles all Reddit-side logic and posts events to a Discord webhook in a dedicated bridge channel. The bot listens via `on_message` for messages from that webhook and acts on them.
+**Architecture:** Reddit closed the script-app API path in late 2025 in favour of Devvit. Direct PRAW/asyncpraw access is no longer available. Instead, a companion Devvit app (in `reddit_devvit/`) handles all Reddit-side logic and posts events to a Discord webhook in a dedicated bridge channel. The bot listens via `on_message` for messages from that webhook and acts on them.
+
+The Devvit app's `discord_webhook_url` setting is **installation-scoped** — each subreddit that installs it configures its own webhook independently. This lets sister subreddits (e.g. r/FriendsOver40 and a hypothetical r/FriendsOver50) each install the same app and point it at their own Discord servers without sharing credentials.
 
 The bot itself has **no Reddit credentials** and makes **no Reddit API calls**.
 
