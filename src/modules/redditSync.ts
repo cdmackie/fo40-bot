@@ -1,0 +1,480 @@
+/**
+ * Reddit ↔ Discord integration via Devvit bridge + invite-link auto-verify.
+ *
+ * Two halves:
+ *   1. Invite-link join flow. The Devvit app's pinned post button signs an
+ *      HMAC token containing the user's Reddit username and redirects them
+ *      to the bot's /join endpoint (web/server.ts), which creates a one-time
+ *      Discord invite and stores {invite_code: reddit_username}. When the
+ *      user joins, this module's on_member_join handler correlates the used
+ *      invite to the stored mapping and auto-links + assigns 40+.
+ *   2. Ban relay. The Devvit app POSTs ban events to a Discord webhook in a
+ *      private bridge channel. on_message listener picks them up and bans
+ *      the linked Discord user.
+ *
+ * Slash commands:
+ *   /link-reddit user:<user> username:<str>  (mod-only manual)
+ *   /unlink-reddit user:<user>               (mod-only manual)
+ *   /reddit-status [user:<user>]             (self anyone, others mod-only)
+ */
+import {
+  AllowedMentionsTypes,
+  ChannelType,
+  ChatInputCommandInteraction,
+  Client,
+  Collection,
+  EmbedBuilder,
+  Events,
+  GuildMember,
+  Invite,
+  Message,
+  MessageFlags,
+  SlashCommandBuilder,
+} from "discord.js";
+
+import { loadSettings } from "../core/config.js";
+import { getDb } from "../core/db.js";
+import { isModerator, requireModerator } from "../core/permissions.js";
+import { BotModule, ModuleCommand } from "../core/types.js";
+
+const settings = loadSettings();
+
+const USERNAME_RE = /^[A-Za-z0-9_-]{3,20}$/;
+const NO_PINGS = { parse: [] as AllowedMentionsTypes[] };
+
+// ---------- DB helpers ----------
+
+function getRedditUsername(discordId: string): string | null {
+  const row = getDb()
+    .prepare(`SELECT reddit_username FROM users WHERE discord_id = ?`)
+    .get(discordId) as { reddit_username: string | null } | undefined;
+  return row?.reddit_username ?? null;
+}
+
+function getDiscordIdForReddit(redditUsername: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT discord_id FROM users WHERE LOWER(reddit_username) = LOWER(?)`,
+    )
+    .get(redditUsername) as { discord_id: number } | undefined;
+  return row ? String(row.discord_id) : null;
+}
+
+function setRedditUsername(discordId: string, redditUsername: string | null): void {
+  const db = getDb();
+  db.prepare(`INSERT OR IGNORE INTO users (discord_id) VALUES (?)`).run(discordId);
+  db.prepare(`UPDATE users SET reddit_username = ? WHERE discord_id = ?`).run(
+    redditUsername,
+    discordId,
+  );
+}
+
+function consumePendingInvite(inviteCode: string): string | null {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT reddit_username FROM pending_invites WHERE invite_code = ?`)
+    .get(inviteCode) as { reddit_username: string } | undefined;
+  if (!row) return null;
+  db.prepare(`DELETE FROM pending_invites WHERE invite_code = ?`).run(inviteCode);
+  return row.reddit_username;
+}
+
+function logBanSync(
+  source: string,
+  userId: string | null,
+  redditUsername: string,
+  action: string,
+  reason: string,
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO ban_sync_log (source, user_id, reddit_username, action, reason)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(source, userId, redditUsername, action, reason);
+}
+
+// ---------- Invite cache + on_member_join ----------
+
+// invite_code -> uses count
+const inviteCache = new Map<string, number>();
+
+async function refreshInviteCache(client: Client): Promise<void> {
+  const guild = client.guilds.cache.get(settings.guildId);
+  if (!guild) return;
+  let invites: Collection<string, Invite>;
+  try {
+    invites = await guild.invites.fetch();
+  } catch (err) {
+    console.warn(
+      `can't list invites for ${guild.name}; auto-link disabled. ` +
+        `Grant 'Manage Server' or 'View Audit Log'. (${(err as Error).message})`,
+    );
+    return;
+  }
+  inviteCache.clear();
+  for (const inv of invites.values()) {
+    inviteCache.set(inv.code, inv.uses ?? 0);
+  }
+  console.info(`invite cache populated: ${inviteCache.size} invites`);
+}
+
+async function identifyUsedInvite(
+  member: GuildMember,
+): Promise<string | null> {
+  let current: Collection<string, Invite>;
+  try {
+    current = await member.guild.invites.fetch();
+  } catch (err) {
+    console.warn(`can't list invites in ${member.guild.name}: ${(err as Error).message}`);
+    return null;
+  }
+  let usedCode: string | null = null;
+  for (const inv of current.values()) {
+    const cached = inviteCache.get(inv.code) ?? 0;
+    if ((inv.uses ?? 0) > cached) {
+      usedCode = inv.code;
+      break;
+    }
+  }
+  if (!usedCode) {
+    // The used invite may be a one-use that got deleted upon consumption,
+    // so it's still in our cache but missing from `current`.
+    const currentCodes = new Set(current.keys());
+    for (const code of inviteCache.keys()) {
+      if (!currentCodes.has(code)) {
+        usedCode = code;
+        break;
+      }
+    }
+  }
+  // Refresh cache.
+  inviteCache.clear();
+  for (const inv of current.values()) inviteCache.set(inv.code, inv.uses ?? 0);
+  return usedCode;
+}
+
+async function onMemberJoin(member: GuildMember): Promise<void> {
+  if (member.guild.id !== settings.guildId) return;
+
+  const usedCode = await identifyUsedInvite(member);
+  if (!usedCode) {
+    console.info(
+      `member ${member.id} (${member.user.username}) joined; could not determine invite`,
+    );
+    return;
+  }
+  const redditUsername = consumePendingInvite(usedCode);
+  if (!redditUsername) {
+    console.info(
+      `member ${member.id} joined via invite ${usedCode}; no pending Reddit mapping`,
+    );
+    return;
+  }
+  setRedditUsername(member.id, redditUsername);
+  console.info(
+    `auto-linked discord=${member.id} to reddit=u/${redditUsername} (invite ${usedCode})`,
+  );
+
+  const role = member.guild.roles.cache.get(settings.fortyPlusRoleId);
+  if (!role) {
+    console.warn(`40+ role ${settings.fortyPlusRoleId} not found`);
+  } else {
+    try {
+      await member.roles.add(role, `invite-link auto-verify from u/${redditUsername}`);
+    } catch (err) {
+      console.error(`failed to assign 40+ role to ${member.id}:`, err);
+    }
+  }
+  try {
+    await member.send(
+      `Welcome to FriendsOver40! Your Discord account is now linked to u/${redditUsername} ` +
+        `and you have full access to the server.`,
+    );
+  } catch {
+    // DMs probably closed — nothing critical.
+  }
+}
+
+// ---------- Bridge listener (ban relay) ----------
+
+async function onMessage(client: Client, message: Message): Promise<void> {
+  if (!settings.bridgeChannelId || !settings.bridgeWebhookId) return;
+  if (message.channelId !== settings.bridgeChannelId) return;
+  if (!message.webhookId || message.webhookId !== settings.bridgeWebhookId) return;
+  for (const embed of message.embeds) {
+    const title = (embed.title ?? "").trim();
+    if (title === "[fo40-bridge] ban") {
+      await handleBanEvent(client, embed);
+    } else {
+      console.warn(`unknown bridge embed title: ${JSON.stringify(title)}`);
+    }
+  }
+}
+
+async function handleBanEvent(
+  client: Client,
+  embed: import("discord.js").Embed,
+): Promise<void> {
+  const fields: Record<string, string> = {};
+  for (const f of embed.fields) fields[f.name] = f.value;
+  const redditUsername = (fields["reddit_username"] ?? "").trim();
+  const reason = (fields["reason"] ?? "").trim().slice(0, 512);
+  if (!redditUsername) {
+    console.warn("ban embed missing reddit_username");
+    return;
+  }
+  const discordId = getDiscordIdForReddit(redditUsername);
+  if (!discordId) {
+    logBanSync("reddit_modlog", null, redditUsername, "unlinked", reason);
+    await postModlogEmbed(client, {
+      title: "Reddit ban — no Discord link",
+      description:
+        "Reddit banned this user, but no Discord member has linked this Reddit account. No automatic action taken.",
+      color: 0x95a5a6,
+      redditUsername,
+      discordId: null,
+      reason,
+    });
+    return;
+  }
+  const guild = client.guilds.cache.get(settings.guildId);
+  if (!guild) {
+    console.warn(`guild not in cache; can't mirror ban for u/${redditUsername}`);
+    return;
+  }
+  try {
+    await guild.members.ban(discordId, { reason: `Reddit modlog: ${reason}` });
+  } catch (err) {
+    const e = err as { code?: number; message?: string };
+    if (e.code === 10007 /* Unknown Member */) {
+      console.info(`Discord ${discordId} not in guild — skipping ban mirror`);
+      logBanSync(
+        "reddit_modlog",
+        discordId,
+        redditUsername,
+        "skipped-not-in-guild",
+        reason,
+      );
+      return;
+    }
+    console.warn(`can't ban Discord ${discordId}: ${e.message}`);
+    logBanSync("reddit_modlog", discordId, redditUsername, "failed-forbidden", reason);
+    await postModlogEmbed(client, {
+      title: "Reddit ban — could not mirror",
+      description:
+        "Reddit banned this user, but the bot couldn't ban them on Discord (missing permission or role hierarchy). Manual action needed.",
+      color: 0xe67e22,
+      redditUsername,
+      discordId,
+      reason,
+    });
+    return;
+  }
+  logBanSync("reddit_modlog", discordId, redditUsername, "ban", reason);
+  console.info(`mirrored Reddit ban: u/${redditUsername} -> Discord ${discordId}`);
+  await postModlogEmbed(client, {
+    title: "Reddit ban mirrored",
+    description: "Discord ban applied automatically.",
+    color: 0xe74c3c,
+    redditUsername,
+    discordId,
+    reason,
+  });
+}
+
+interface ModlogEmbedArgs {
+  title: string;
+  description: string;
+  color: number;
+  redditUsername: string;
+  discordId: string | null;
+  reason: string;
+}
+
+async function postModlogEmbed(client: Client, args: ModlogEmbedArgs): Promise<void> {
+  const channel = client.channels.cache.get(settings.modLogChannelId);
+  if (!channel?.isSendable()) {
+    console.warn(`mod-log channel ${settings.modLogChannelId} not sendable`);
+    return;
+  }
+  const embed = new EmbedBuilder()
+    .setTitle(args.title)
+    .setDescription(args.description)
+    .setColor(args.color)
+    .setTimestamp(new Date())
+    .addFields(
+      { name: "Reddit user", value: `u/${args.redditUsername}`, inline: true },
+    );
+  if (args.discordId !== null) {
+    embed.addFields({ name: "Discord", value: `<@${args.discordId}>`, inline: true });
+  }
+  embed.addFields({
+    name: "Reason",
+    value: args.reason || "(no reason)",
+    inline: false,
+  });
+  try {
+    await channel.send({ embeds: [embed], allowedMentions: NO_PINGS });
+  } catch (err) {
+    console.error("failed to post modlog embed:", err);
+  }
+}
+
+// ---------- Slash commands ----------
+
+const linkRedditCmd = new SlashCommandBuilder()
+  .setName("link-reddit")
+  .setDescription("Manually link a Discord user to a Reddit username (mods/admins only)")
+  .setDMPermission(false)
+  .addUserOption((o) =>
+    o.setName("user").setDescription("Discord user to link").setRequired(true),
+  )
+  .addStringOption((o) =>
+    o
+      .setName("username")
+      .setDescription("Reddit username (without u/)")
+      .setRequired(true),
+  );
+
+const unlinkRedditCmd = new SlashCommandBuilder()
+  .setName("unlink-reddit")
+  .setDescription("Remove a Discord user's Reddit link (mods/admins only)")
+  .setDMPermission(false)
+  .addUserOption((o) =>
+    o.setName("user").setDescription("Discord user to unlink").setRequired(true),
+  );
+
+const redditStatusCmd = new SlashCommandBuilder()
+  .setName("reddit-status")
+  .setDescription("Show your linked Reddit account (or another user's, mods only)")
+  .setDMPermission(false)
+  .addUserOption((o) =>
+    o.setName("user").setDescription("Optional: another user (mods/admins only)"),
+  );
+
+async function handleLink(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (await requireModerator(interaction)) return;
+  const user = interaction.options.getUser("user", true);
+  let username = interaction.options
+    .getString("username", true)
+    .trim()
+    .replace(/^\//, "")
+    .replace(/^u\//i, "")
+    .trim();
+  if (!USERNAME_RE.test(username)) {
+    await interaction.reply({
+      content:
+        "That doesn't look like a valid Reddit username (3-20 chars; letters, digits, `-`, `_`).",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  const otherOwner = getDiscordIdForReddit(username);
+  if (otherOwner && otherOwner !== user.id) {
+    await interaction.reply({
+      content: `u/${username} is already linked to another Discord user (<@${otherOwner}>).`,
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: NO_PINGS,
+    });
+    return;
+  }
+  const existing = getRedditUsername(user.id);
+  setRedditUsername(user.id, username);
+  const note = existing ? ` (was u/${existing})` : "";
+  await interaction.reply({
+    content: `Linked ${user.toString()} to u/${username}${note}.`,
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: NO_PINGS,
+  });
+  console.info(
+    `manual link by ${interaction.user.id}: discord=${user.id} reddit=u/${username}`,
+  );
+}
+
+async function handleUnlink(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (await requireModerator(interaction)) return;
+  const user = interaction.options.getUser("user", true);
+  const existing = getRedditUsername(user.id);
+  if (!existing) {
+    await interaction.reply({
+      content: `${user.toString()} has no linked Reddit account.`,
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: NO_PINGS,
+    });
+    return;
+  }
+  setRedditUsername(user.id, null);
+  await interaction.reply({
+    content: `Unlinked ${user.toString()} from u/${existing}.`,
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: NO_PINGS,
+  });
+}
+
+async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
+  const otherUser = interaction.options.getUser("user");
+  const lookingAtOther = otherUser !== null && otherUser.id !== interaction.user.id;
+  if (lookingAtOther) {
+    const m = interaction.member;
+    if (!(m instanceof GuildMember) || !isModerator(m)) {
+      await interaction.reply({
+        content: "Looking up another user's Reddit link is mods/admins only.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  }
+  const targetId = lookingAtOther ? otherUser!.id : interaction.user.id;
+  const label = lookingAtOther ? otherUser!.displayName : "You";
+  const username = getRedditUsername(targetId);
+  if (!username) {
+    const verb = lookingAtOther ? "has" : "have";
+    await interaction.reply({
+      content: `${label} ${verb} no linked Reddit account.`,
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: NO_PINGS,
+    });
+    return;
+  }
+  await interaction.reply({
+    content: `${label}: u/${username}`,
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: NO_PINGS,
+  });
+}
+
+const commands: ModuleCommand[] = [
+  { data: linkRedditCmd.toJSON(), execute: handleLink },
+  { data: unlinkRedditCmd.toJSON(), execute: handleUnlink },
+  { data: redditStatusCmd.toJSON(), execute: handleStatus },
+];
+
+const moduleDef: BotModule = {
+  name: "redditSync",
+  commands,
+  init(client) {
+    client.on(Events.ClientReady, () => {
+      void refreshInviteCache(client);
+    });
+    client.on(Events.InviteCreate, (inv) => {
+      if (inv.guild?.id === settings.guildId) {
+        inviteCache.set(inv.code, inv.uses ?? 0);
+      }
+    });
+    client.on(Events.InviteDelete, (inv) => {
+      if (inv.guild?.id === settings.guildId) {
+        inviteCache.delete(inv.code);
+      }
+    });
+    client.on(Events.GuildMemberAdd, (member) => {
+      void onMemberJoin(member as GuildMember);
+    });
+    client.on(Events.MessageCreate, (msg) => {
+      // We need embeds, not message content. Channel.type and webhookId
+      // are present without MessageContent intent.
+      void onMessage(client, msg);
+    });
+  },
+};
+export default moduleDef;

@@ -1,4 +1,4 @@
-# Secrets — anywhere in the tree
+# Secrets
 .env
 *.env
 !.env.example
@@ -6,15 +6,11 @@
 # Operator-specific runtime config (use config.yaml.example as template)
 /config.yaml
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.venv/
-venv/
-*.egg-info/
-.pytest_cache/
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
 
 # Database
 data/*.db
@@ -22,11 +18,8 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 
-# Node / Devvit
-node_modules/
-dist/
+# Devvit
 .devvit/
-*.tsbuildinfo
 
 # Editor / OS
 .DS_Store
@@ -37,3 +30,10 @@ dist/
 
 # Logs
 *.log
+
+# Stale Python (kept by accident)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

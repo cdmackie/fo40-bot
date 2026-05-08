@@ -32,13 +32,14 @@ Decisions throughout the codebase are informed by the fact that this serves a 40
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Language / lib | Python 3.12 + `discord.py>=2.4` | Mature, async-native, good Cog pattern; matches operator's other Python work |
-| Database | SQLite via `aiosqlite` | Single file, zero ops, fits one-server scope |
-| Scheduling | `APScheduler` (`AsyncIOScheduler`) | Cron expressions, single shared instance across cogs |
+| Language / lib | Node.js 20+ + `discord.js@^14` | TypeScript-first, mature; matches operator's stack |
+| HTTP server | `fastify` (in-process with the bot) | Same Node process owns both the Discord gateway connection and the `/join` HTTP endpoint — single Docker container |
+| Database | SQLite via `better-sqlite3` (sync, fast at our scale) | Single file, zero ops, fits one-server scope |
+| Scheduling | `croner` | Cron expressions, IANA tz support, simple lifecycle |
 | Config | `.env` for secrets/IDs, `config.yaml` for runtime-tweakable values | Clean separation of "must restart" vs "edit and reload" |
-| Reddit API | `praw` (planned, not yet added) | For ban-sync and announcement mirror |
-| Deployment | Docker Compose, self-hosted on operator's server | Operator preference |
-| Architecture | discord.py Cogs, one feature per cog, independently loadable | Standard discord.py pattern, allows feature toggling |
+| Reddit integration | Companion Devvit app at `reddit_devvit/` (TypeScript), no Reddit API access on the bot | Reddit closed script-app API access; Devvit is the only path |
+| Deployment | Docker Compose, self-hosted on operator's server (often behind nginx) | Operator preference |
+| Architecture | Modular: each feature is a `BotModule` exporting commands + listeners; `bot.ts` loads them all | Standard discord.js pattern, allows feature toggling |
 
 **Single-guild assumption is hardcoded.** `GUILD_ID` is in `.env`, not config.yaml. Slash commands are guild-scoped, not global. Do not introduce multi-guild abstractions.
 
@@ -48,38 +49,36 @@ Decisions throughout the codebase are informed by the fact that this serves a 40
 
 ```
 fo40-bot/
-├── bot.py                 # Entry point. Loads cogs, starts scheduler, runs gateway.
-├── config.yaml            # Runtime-tweakable: schedules, prompt pool, reaction-role messages
-├── .env                   # Secrets and IDs (gitignored)
-├── .env.example           # Template for .env
-├── requirements.txt
-├── Dockerfile
+├── src/
+│   ├── index.ts           # Entry point — calls bot.run()
+│   ├── bot.ts             # Discord Client + command registration + signal handling
+│   ├── core/
+│   │   ├── config.ts      # Settings interface, env + YAML loader
+│   │   ├── db.ts          # better-sqlite3 + schema
+│   │   ├── scheduling.ts  # croner job registry + cron-shift helper
+│   │   ├── permissions.ts # isModerator/isFortyPlus + interaction guards
+│   │   └── types.ts       # BotModule interface
+│   ├── modules/           # One file per feature
+│   │   ├── scheduler.ts   # IMPLEMENTED — generalised scheduled-channel controller
+│   │   ├── modNotes.ts    # IMPLEMENTED — /note, /strike, /history
+│   │   ├── redditSync.ts  # IMPLEMENTED — invite-link auto-verify + ban relay
+│   │   # Planned but not yet implemented:
+│   │   # ├── dmReports.ts
+│   │   # ├── reactionRoles.ts
+│   │   # ├── prompts.ts
+│   │   # └── birthdays.ts
+│   └── web/
+│       └── server.ts      # IMPLEMENTED — fastify server: GET /join handles invite-link tokens
+├── package.json
+├── tsconfig.json
+├── Dockerfile             # node:20-alpine, multi-stage
 ├── docker-compose.yml
-├── README.md              # Operator-facing setup instructions
-├── SPEC.md                # This file
+├── config.yaml.example    # Template; copy to config.yaml and fill in
+├── .env.example           # Template; copy to .env and fill in
 ├── data/
 │   └── bot.db             # SQLite, persistent (gitignored)
-├── core/                  # Shared infrastructure used by cogs
-│   ├── __init__.py
-│   ├── db.py              # Schema + connection helper
-│   ├── config.py          # Settings dataclass, env+YAML loader
-│   ├── scheduling.py      # Shared APScheduler instance + cron helper
-│   └── permissions.py     # Role checks, slash command guards
-├── cogs/                  # One file per feature
-│   ├── __init__.py
-│   ├── scheduler.py       # IMPLEMENTED — generalised scheduled-channel controller
-│   ├── mod_notes.py       # IMPLEMENTED — /note, /strike, /history
-│   ├── reddit_sync.py     # IMPLEMENTED — invite-link auto-verify + ban relay
-│   # Planned but not yet implemented:
-│   # ├── dm_reports.py
-│   # ├── reaction_roles.py
-│   # ├── prompts.py
-│   # └── birthdays.py
-├── web/                   # IMPLEMENTED
-│   ├── __init__.py
-│   └── server.py          # aiohttp server: GET /join handles invite-link tokens
 └── reddit_devvit/         # Companion Devvit app (TypeScript). Uploaded to Reddit;
-    ├── devvit.yaml        # not run by this Python project. See its README.
+    ├── devvit.yaml        # not run by this Node project. See its README.
     ├── package.json
     ├── tsconfig.json
     └── src/main.tsx

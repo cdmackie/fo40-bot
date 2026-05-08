@@ -75,29 +75,44 @@ docker compose logs -f
 
 The first run creates `data/bot.db` and registers slash commands with the guild.
 
+For local development without Docker:
+
+```bash
+npm install
+npm run dev    # tsx with watch — hot-reloads on changes
+# or
+npm run build && npm start
+```
+
 ## Layout
 
 ```
 fo40-bot/
-├── bot.py              # entry point
-├── config.yaml         # runtime-tweakable: schedules, prompt pool
-├── .env                # secrets, IDs (gitignored)
-├── data/bot.db         # SQLite, persistent
-├── core/
-│   ├── __init__.py
-│   ├── db.py           # schema, connection
-│   ├── config.py       # env + YAML loader
-│   ├── scheduling.py   # shared APScheduler
-│   └── permissions.py  # role checks, slash command guards
-├── cogs/
-│   ├── __init__.py
-│   ├── scheduler.py    # generalized scheduled-channel controller
-│   ├── mod_notes.py    # /note, /strike, /history
-│   └── reddit_sync.py  # /link-reddit (mod), /reddit-status, on_member_join, ban-relay listener
-├── web/
-│   ├── __init__.py
-│   └── server.py       # aiohttp server: GET /join issues one-time Discord invite from signed token
-└── reddit_devvit/      # companion Devvit app (TypeScript) — see its README
+├── src/
+│   ├── index.ts          # entry point
+│   ├── bot.ts            # client + command registration + lifecycle
+│   ├── core/
+│   │   ├── config.ts     # env + YAML loader
+│   │   ├── db.ts         # better-sqlite3 + schema
+│   │   ├── scheduling.ts # croner-based job runner
+│   │   ├── permissions.ts# role checks + interaction guards
+│   │   └── types.ts      # BotModule interface
+│   ├── modules/          # one file per feature ("cogs")
+│   │   ├── scheduler.ts  # scheduled-channel controller
+│   │   ├── modNotes.ts   # /note, /strike, /history
+│   │   └── redditSync.ts # /link-reddit (mod), /reddit-status, member-join auto-link, ban-relay listener
+│   └── web/
+│       └── server.ts     # fastify: GET /join issues one-time Discord invite from signed token
+├── package.json          # node deps + scripts
+├── tsconfig.json
+├── Dockerfile            # node:20-alpine, multi-stage build
+├── docker-compose.yml
+├── config.yaml           # runtime-tweakable: schedules (gitignored)
+├── config.yaml.example   # template
+├── .env                  # secrets, IDs (gitignored)
+├── .env.example          # template
+├── data/bot.db           # SQLite, persistent
+└── reddit_devvit/        # companion Devvit app (TypeScript) — see its README
     ├── devvit.yaml
     ├── package.json
     └── src/main.tsx

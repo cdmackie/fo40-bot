@@ -1,16 +1,30 @@
-FROM python:3.12-slim
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# tzdata so zoneinfo works inside the container
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
-    && rm -rf /var/lib/apt/lists/*
+# Install build deps for better-sqlite3 (native module).
+RUN apk add --no-cache python3 make g++ tzdata
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package.json ./
+RUN npm install --no-audit --no-fund
 
-COPY bot.py ./
-COPY core/ ./core/
-COPY cogs/ ./cogs/
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
 
-CMD ["python", "-u", "bot.py"]
+
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# tzdata for IANA timezone support in croner.
+RUN apk add --no-cache tzdata
+
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+
+# Bot writes its SQLite DB into ./data; mount as a volume in compose.
+RUN mkdir -p data
+
+CMD ["node", "dist/index.js"]
