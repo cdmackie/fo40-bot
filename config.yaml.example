@@ -1,0 +1,18 @@
+# Runtime-tweakable config. Copy this file to `config.yaml` and fill in the IDs.
+# Server-specific IDs live here; secrets/tokens live in .env.
+
+scheduled_channels:
+  - name: selfie_sunday
+    channel_id: 0            # ID of the #selfie-sunday channel
+    gate_role_id: 0          # ID of the role whose access toggles open/closed (e.g. "40+"); omit to toggle @everyone
+    open_cron:  "0 0 * * 0"  # Sunday 00:00 local-time (cron uses 0=Sun)
+    close_cron: "0 0 * * 1"  # Monday 00:00 local-time
+    timezone: America/Los_Angeles
+    purge_on_close: true
+    skip_pinned: true
+    announce:
+      channel_id: 0          # ID of the channel where open/close announcements post
+      open_message: "☀️ **Selfie Sunday is open!** Post your selfies — channel resets at midnight Pacific."
+      close_warning_minutes: 30
+      close_warning_message: "⏰ Selfie Sunday closes in 30 minutes. Last call!"
+      close_message: "Selfie Sunday closes in 30 minutes."

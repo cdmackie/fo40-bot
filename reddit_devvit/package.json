@@ -1,0 +1,19 @@
+{
+  "name": "fo40-bridge",
+  "version": "0.0.0",
+  "description": "Devvit app: relays r/FriendsOver40 modlog bans and Discord-link verifications to a Discord webhook.",
+  "license": "BSD-3-Clause",
+  "private": true,
+  "scripts": {
+    "build": "devvit build",
+    "upload": "devvit upload",
+    "playtest": "devvit playtest"
+  },
+  "dependencies": {
+    "@devvit/public-api": "0.12.22"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "type": "module"
+}

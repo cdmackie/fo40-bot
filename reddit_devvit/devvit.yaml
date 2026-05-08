@@ -1,0 +1,6 @@
+name: fo40-bridge
+version: 0.0.1
+http:
+  fetch:
+    allowList:
+      - discord.com
