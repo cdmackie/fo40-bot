@@ -218,6 +218,17 @@ class RedditSyncCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        # Diagnostic: log every message in the bridge channel regardless of
+        # webhook filter, so we can see what the bot is actually receiving.
+        if message.channel.id == settings.bridge_channel_id:
+            log.info(
+                "bridge msg seen: webhook_id=%s expected=%s match=%s embeds=%d titles=%s",
+                message.webhook_id,
+                settings.bridge_webhook_id,
+                message.webhook_id == settings.bridge_webhook_id,
+                len(message.embeds),
+                [e.title for e in message.embeds],
+            )
         # Only listen in the configured bridge channel, and only to messages
         # from the configured webhook (other webhooks or human messages in
         # that channel are ignored).
