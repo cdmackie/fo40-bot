@@ -1,82 +1,84 @@
 # fo40-bridge — Devvit app
 
-Companion Devvit app for the [FriendsOver40 Discord bot](../README.md). Relays r/FriendsOver40 modlog bans and Discord-link verifications to a Discord webhook so the linked Discord server can mirror moderator decisions.
+Companion Devvit app for the [FriendsOver40 Discord bot](../README.md). Two integrations:
 
-This app is **not intended for the public App Directory** — it's a single-purpose tool for one specific subreddit (r/FriendsOver40) and its companion Discord server.
+1. **Modlog ban relay.** When a mod bans a user on r/FriendsOver40, the app posts a structured embed to a Discord webhook. The bot reads it and bans the linked Discord user.
+2. **Invite-link join flow.** A pinned custom post on r/FriendsOver40 has a "Get Discord invite" button. When a Reddit user clicks it, the app signs an HMAC token containing their Reddit username and redirects them to the bot's web server, which creates a one-time-use Discord invite and sends the user to discord.gg. On member join, the bot auto-links the Discord account to the Reddit username and assigns the `40+` role.
 
-See [`PRIVACY.md`](PRIVACY.md) and [`TERMS.md`](TERMS.md) for the data-handling details required by Reddit's App Review for any app that uses HTTP fetch.
+This app is **not intended for the public App Directory** — it's a private tool for r/FriendsOver40 (and any sister subs we install it on, e.g. r/FriendsOver50).
 
-## What it does
+See [`PRIVACY.md`](PRIVACY.md) and [`TERMS.md`](TERMS.md) for the data-handling details required by Reddit's App Review.
 
-1. **Modlog ban relay.** Listens to the subreddit's `ModAction` events. When a moderator bans a user, posts a structured embed (containing the banned user's Reddit username, the moderator's name, and the reason) to a Discord webhook URL configured in app settings. The companion Discord bot reads that embed from a private channel and applies a Discord ban to the linked Discord account, if any. One-way only — Discord-side actions are not propagated back to Reddit.
-2. **Discord-link verification.** Adds a "Link Discord account" subreddit menu item. A logged-in Reddit user opens it, pastes a 6-digit one-time code they got from Discord's `/link-reddit` command, and the app posts a `verify` embed (containing only the user's Reddit username and the code) to the same webhook. The Discord bot matches the code to the originating Discord user and writes the link.
+## User experience
 
-The Discord bot holds no Reddit credentials and makes no Reddit API calls. All Reddit-side logic lives in this app.
+For a Reddit user joining the Discord:
+1. They click "Get Discord invite" on the pinned post on r/FriendsOver40.
+2. Their browser is redirected through the bot's server to a single-use Discord invite link.
+3. They click "Accept Invite" in Discord.
+4. They land in the server with the `40+` role already applied and a welcome DM.
+
+**No slash commands. No codes. No forms.** Two clicks total.
 
 ## HTTP fetch domains
 
-This app only posts to **`discord.com`**, which is on Devvit's global fetch allowlist. Specifically, it POSTs JSON-encoded embeds to a Discord webhook URL stored in the app's `discord_webhook_url` setting (configured per-install by a subreddit moderator). Nothing is sent anywhere else; no other domain is contacted.
+This app only POSTs to `discord.com`, which is on Devvit's global fetch allowlist. JSON-encoded ban event embeds go to a Discord webhook URL stored in the install setting `discord_webhook_url`.
 
-The data sent is limited to:
-- For ban events: the banned redditor's username, the modlog event's moderator and reason — all data already visible to mods of the subreddit.
-- For verify events: the calling redditor's username and the 6-digit code they entered.
+The invite-link button does NOT use HTTP fetch — it navigates the user's browser to the Discord bot's public URL via `context.ui.navigateTo()`, which doesn't count as a fetch. (The token is signed in-app with HMAC-SHA256.)
 
-No PII beyond what's already in Reddit's public/mod-visible data is transmitted.
+Data sent:
+- Ban events: banned redditor's username, modlog moderator, ban reason — all already mod-visible on Reddit.
+- Invite-link tokens (in URL query string): the user's Reddit username and an expiry timestamp, HMAC-signed with the shared secret.
+
+No PII beyond what's already on Reddit is transmitted.
 
 ## Setup
 
 Prerequisites:
 - Node.js 20+
 - A Reddit account that moderates r/FriendsOver40
-- The Discord bot is running with a bridge channel + webhook configured (see main repo README)
+- The Discord bot is running with a public URL, a bridge channel + webhook, and a 32+ char `BRIDGE_SIGNING_SECRET` in its `.env` (see the main repo README)
 
 ```bash
 # In this directory:
 npm install
-npx devvit login          # log in as the developer account
-npx devvit publish        # submits a build for Reddit App Review (unlisted)
+npx devvit login
+npx devvit publish        # submits to App Review (unlisted)
 ```
 
-`devvit publish` (without `--public`) submits to review but keeps the app unlisted — it will not appear in the App Directory and only the developer can install it. Review typically takes 1-2 business days; you'll get an email when approved.
-
-Once approved:
+Review typically takes 1-2 business days for first launches, often faster for updates. Once approved:
 
 ```bash
 npx devvit install r/FriendsOver40
 ```
 
-Then **on Reddit**, go to `https://www.reddit.com/r/FriendsOver40/about/edit/community-app-settings` (or: subreddit mod tools → "Community apps" → fo40-bridge → settings) and paste the Discord webhook URL into the `discord_webhook_url` field.
+Then on Reddit, go to `https://www.reddit.com/r/FriendsOver40/about/edit/community-app-settings` (or: subreddit mod tools → "Community apps" → fo40-bridge → settings) and fill in:
 
-The setting is **installation-scoped**, so each subreddit that installs the app configures its own webhook URL independently. This lets the same app serve multiple sister subreddits (e.g. r/FriendsOver40 and r/FriendsOver50) — each with its own companion Discord server and webhook — without sharing credentials.
+| Setting | Value |
+| --- | --- |
+| `discord_webhook_url` | The Discord webhook URL from your bridge channel |
+| `signing_secret` | Same value as the bot's `BRIDGE_SIGNING_SECRET` (32+ chars random) |
+| `bot_join_url` | The bot's public `/join` URL, e.g. `https://fo40.example.com/join` |
 
-### Why publish (not upload)?
+All settings are **installation-scoped**, so each subreddit (e.g. r/FriendsOver40 and r/FriendsOver50) configures its own.
 
-`npx devvit upload` creates a private build that the developer can install only on subreddits with **fewer than 200 subscribers** (or specific test subs). r/FriendsOver40 is larger, so review is required even though we keep the app unlisted.
+## Creating the pinned join post
 
-### Iterating before publish
+After installing the app, run the **"Create Discord-join post (mods only)"** menu item from the subreddit overflow menu. This creates a custom post titled "Join the FriendsOver40 Discord". Pin it to your subreddit so it's the first thing visitors see.
 
-To test the trigger and form against a sandbox first, create a tiny private subreddit you mod (e.g. `r/fo40_test`) and run:
+## Iterating before publish
+
+To test against a sandbox without going through review (only works on subs <200 subscribers):
 
 ```bash
-npx devvit playtest fo40_test
+npx devvit playtest <your-test-subreddit>
 ```
 
-Hot-reloads on every save. Test a ban (ban a throwaway account in the sandbox sub) to confirm the webhook embed shape lands correctly in your Discord bridge channel.
+Hot-reloads on every save. Test the flow by clicking the join button and watching for the redirect chain to land you in your test Discord server.
 
-## Discord-side setup (do this first)
+## Embed protocol (ban relay)
 
-1. In your Discord server, create a channel `#reddit-bridge` (mods/admins only — do not give `40+` view access).
-2. Channel Settings → Integrations → Webhooks → New Webhook → name it `fo40-bridge` → copy the webhook URL → save.
-3. Note the **webhook ID** (the long number in the URL between `/webhooks/` and `/`). Put it in the bot's `.env` as `BRIDGE_WEBHOOK_ID`.
-4. Right-click the bridge channel → Copy Channel ID → put in `.env` as `BRIDGE_CHANNEL_ID`.
-5. Restart the bot. Look for a startup line confirming the cog loaded (or the disabled message if either ID is missing).
-6. Paste the webhook URL into the Devvit app's `discord_webhook_url` setting.
+The bot expects exactly this embed shape from this app's webhook posts:
 
-## Embed protocol
-
-The Discord bot expects exactly two embed shapes from this app's webhook posts (in the bridge channel only):
-
-**Ban event:**
 ```
 title:  "[fo40-bridge] ban"
 fields:
@@ -85,30 +87,27 @@ fields:
   reason:          <str>
 ```
 
-**Verify event:**
-```
-title:  "[fo40-bridge] verify"
-fields:
-  reddit_username: <str>
-  code:            <str>
-```
-
 Anything else is ignored. The bot also filters by `webhook_id` so other webhooks posting in the same channel won't trigger anything.
 
-## Development
+## Token format (invite-link flow)
 
-```bash
-npx devvit playtest <a test subreddit you mod>    # iterate against a private sub
+```
+<base64url(payload_json)>.<base64url(hmac_sha256(payload_json, signing_secret))>
 ```
 
-Logs from `console.log` show up in Reddit's developer dashboard at `https://developers.reddit.com/apps/fo40-bridge`.
+Payload JSON:
+```json
+{ "u": "<reddit_username>", "e": <unix_epoch_seconds_when_token_expires> }
+```
+
+The bot's `web/server.py` validates both the signature and the expiry before issuing an invite.
 
 ## Known limitations
 
-- A Discord webhook URL leak means anyone could spoof ban/verify events. The bridge channel must be locked down to mods/admins only — assume the URL is sensitive even though it's "secret-by-obscurity".
-- `console.log` debug payloads must not include the webhook URL.
-- Verification codes are validated bot-side; an attacker who knows someone's code could complete the link as themselves. Codes are 6 digits → 1-in-a-million guess. With a 10-min TTL and one pending code per Discord user, brute-force is not realistic, but it's not bulletproof either.
-- If the Devvit app is uninstalled, ban relaying stops silently — the Discord bot has no way to know. Plan to monitor whether the app is still installed.
+- **Webhook URL leak** = anyone can spoof ban events. Lock the bridge channel down to mods/admins only.
+- **Signing secret leak** = anyone can forge invite-link URLs and claim any Reddit username for any Discord account. Treat it as a credential.
+- **Devvit app uninstall is silent** to the bot. If join-button clicks stop working, check the app at `https://developers.reddit.com/apps/fo40-bridge`.
+- **Custom post button on mobile** has been mostly tested via playtest. Behavior on the official Reddit mobile app is generally OK; if a user reports the button doesn't work, fall back to `/link-reddit` mod-driven manual link.
 
 ## License
 

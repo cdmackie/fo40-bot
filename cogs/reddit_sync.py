@@ -1,32 +1,36 @@
-"""Reddit -> Discord ban sync via a Devvit bridge.
+"""Reddit -> Discord ban sync + invite-link auto-verification.
 
-A companion Devvit app on r/FriendsOver40 (see `reddit_devvit/`) posts modlog
-events and verification attempts to a Discord webhook. The webhook lands the
-messages in a dedicated bridge channel that this cog watches via `on_message`.
+There are two integration paths between r/FriendsOver40 (a Devvit app) and
+this bot:
 
-The bot itself holds NO Reddit credentials and does not call any Reddit API.
-Everything Reddit-side is done by the Devvit app, which Reddit hosts.
+  1. Ban relay (existing). The Devvit app's ModAction trigger forwards bans
+     to a Discord webhook in a private bridge channel. This cog's
+     `on_message` listener picks them up and applies a Discord ban to the
+     linked Discord user. One-way only.
+
+  2. Invite-link verification (new). The Devvit app pins a custom post on
+     r/FriendsOver40 with a "Get Discord invite" button. The button signs an
+     HMAC token containing the user's Reddit username and redirects them to
+     the bot's web server (web/server.py). The web server creates a
+     one-time-use Discord invite, stores {invite_code: reddit_username} in
+     `pending_invites`, and redirects the browser to discord.gg/<code>. When
+     the user joins Discord, this cog's `on_member_join` listener correlates
+     the used invite to the pending mapping and:
+       - saves the Reddit link (`users.reddit_username`)
+       - assigns the 40+ role
+       - DMs the user a welcome message
 
 Slash commands:
-  /link-reddit                — issues a one-time code; instructs user to
-                                go to the Devvit form on Reddit and paste it
-  /unlink-reddit              — removes the link
-  /reddit-status [user:<u>]   — shows linked Reddit username (mod-only for
-                                looking up another user)
+  /link-reddit user:<user> username:<str>  — mod-only, manual link
+  /unlink-reddit user:<user>               — mod-only, manual unlink
+  /reddit-status [user:<user>]             — anyone for self; mod-only for others
 
-Webhook embed protocol (set by the Devvit app):
-  title="[fo40-bridge] ban"
-    fields: reddit_username, moderator, reason
-  title="[fo40-bridge] verify"
-    fields: reddit_username, code
-
-If BRIDGE_CHANNEL_ID or BRIDGE_WEBHOOK_ID is unset in .env, this cog
-self-disables at load time.
+If BRIDGE_CHANNEL_ID/BRIDGE_WEBHOOK_ID aren't set, the on_message bridge
+listener self-disables. The on_member_join handler always runs (it's harmless
+without invite-link mapping).
 """
 import logging
-import secrets
-import time
-from dataclasses import dataclass
+import re
 from datetime import datetime, timezone
 
 import discord
@@ -34,33 +38,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from core import config, db
-from core.permissions import forty_plus_only, is_moderator
+from core.permissions import is_moderator, mod_only
 
 log = logging.getLogger("fo40.reddit_sync")
 settings = config.load()
 
-CODE_TTL_SECONDS = 10 * 60  # 10 minutes
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
 
 NO_PINGS = discord.AllowedMentions.none()
-
-
-@dataclass
-class PendingVerification:
-    discord_id: int
-    code: str
-    created_at: float  # time.monotonic()
-
-
-# In-memory pending verifications (lost on bot restart; user just runs
-# /link-reddit again). One per Discord user.
-_pending: dict[int, PendingVerification] = {}
-
-
-def _cleanup_expired():
-    now = time.monotonic()
-    expired = [k for k, v in _pending.items() if now - v.created_at > CODE_TTL_SECONDS]
-    for k in expired:
-        _pending.pop(k, None)
 
 
 # ---------- DB helpers ----------
@@ -98,6 +83,25 @@ async def _set_reddit_username(discord_id: int, reddit_username: str | None):
         await conn.commit()
 
 
+async def _consume_pending_invite(invite_code: str) -> str | None:
+    """Look up the Reddit username an invite was issued for, and clear it.
+    Returns None if no pending mapping exists for this code."""
+    async with db.connect() as conn:
+        async with conn.execute(
+            "SELECT reddit_username FROM pending_invites WHERE invite_code = ?",
+            (invite_code,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        await conn.execute(
+            "DELETE FROM pending_invites WHERE invite_code = ?",
+            (invite_code,),
+        )
+        await conn.commit()
+        return row[0]
+
+
 async def _log_ban_sync(
     source: str,
     user_id: int | None,
@@ -119,61 +123,216 @@ async def _log_ban_sync(
 class RedditSyncCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # invite_code -> uses count, used to determine which invite a new
+        # member just used in on_member_join.
+        self._invite_cache: dict[str, int] = {}
+
+    async def cog_load(self):
+        # Cache will be populated on on_ready (cog might load before the
+        # bot is connected).
+        pass
+
+    async def _refresh_invite_cache(self):
+        guild = self.bot.get_guild(settings.guild_id)
+        if guild is None:
+            return
+        try:
+            invites = await guild.invites()
+        except discord.Forbidden:
+            log.warning(
+                "can't list invites for %s; auto-link on join will not work. "
+                "Grant the bot 'Manage Server' or 'View Audit Log'.",
+                guild.name,
+            )
+            return
+        self._invite_cache = {inv.code: (inv.uses or 0) for inv in invites}
+        log.info("invite cache populated: %d invites", len(self._invite_cache))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        await self._refresh_invite_cache()
+
+    @commands.Cog.listener()
+    async def on_invite_create(self, invite: discord.Invite):
+        if invite.guild and invite.guild.id == settings.guild_id:
+            self._invite_cache[invite.code] = invite.uses or 0
+
+    @commands.Cog.listener()
+    async def on_invite_delete(self, invite: discord.Invite):
+        if invite.guild and invite.guild.id == settings.guild_id:
+            self._invite_cache.pop(invite.code, None)
+
+    # ----- Auto-link on join -----
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        if member.guild.id != settings.guild_id:
+            return
+
+        used_invite = await self._identify_used_invite(member.guild)
+        if used_invite is None:
+            log.info(
+                "member %s (%s) joined; could not determine which invite was used",
+                member.id, member.name,
+            )
+            return
+
+        reddit_username = await _consume_pending_invite(used_invite.code)
+        if reddit_username is None:
+            log.info(
+                "member %s joined via invite %s; no pending Reddit mapping",
+                member.id, used_invite.code,
+            )
+            return
+
+        await _set_reddit_username(member.id, reddit_username)
+        log.info(
+            "auto-linked discord=%s to reddit=u/%s (invite %s)",
+            member.id, reddit_username, used_invite.code,
+        )
+
+        # Assign 40+ role.
+        role = member.guild.get_role(settings.forty_plus_role_id)
+        if role is None:
+            log.warning(
+                "40+ role %s not found in guild; skipping role assign",
+                settings.forty_plus_role_id,
+            )
+        else:
+            try:
+                await member.add_roles(
+                    role, reason=f"invite-link auto-verify from u/{reddit_username}",
+                )
+            except discord.HTTPException:
+                log.exception("failed to assign 40+ role to %s", member.id)
+
+        # DM welcome.
+        try:
+            await member.send(
+                f"Welcome to FriendsOver40! Your Discord account is now linked "
+                f"to u/{reddit_username} and you have full access to the server.",
+                allowed_mentions=NO_PINGS,
+            )
+        except discord.HTTPException:
+            log.debug("could not DM welcome to %s (DMs likely closed)", member.id)
+
+    async def _identify_used_invite(
+        self, guild: discord.Guild,
+    ) -> discord.Invite | None:
+        """Return the invite whose use-count went up since the last cache, or None."""
+        try:
+            current = await guild.invites()
+        except discord.Forbidden:
+            log.warning("can't list invites in %s; auto-link disabled", guild.name)
+            return None
+
+        used: discord.Invite | None = None
+        for inv in current:
+            cached = self._invite_cache.get(inv.code, 0)
+            if (inv.uses or 0) > cached:
+                used = inv
+                break
+
+        # Refresh cache. Note: a one-use invite may have been deleted after use,
+        # in which case it's not in `current` — we handle that below.
+        new_cache = {inv.code: (inv.uses or 0) for inv in current}
+
+        if used is None:
+            # Invite may be a one-time-use that got deleted on use. The deleted
+            # code is still in our cache but missing from `current` → that's
+            # the one we want.
+            for code in self._invite_cache:
+                if code not in new_cache:
+                    # Reconstruct a minimal Invite-like object. discord.py's
+                    # Invite is complex; we just need .code so use a simple
+                    # wrapper.
+                    return _DeletedInvite(code=code)
+
+        self._invite_cache = new_cache
+        return used
 
     # ----- Slash commands -----
 
     @app_commands.command(
         name="link-reddit",
-        description="Get a one-time code to link your Reddit account via Reddit",
+        description="Manually link a Discord user to a Reddit username (mods/admins only)",
     )
-    @forty_plus_only()
-    async def link_reddit(self, interaction: discord.Interaction):
-        existing = await _get_reddit_username(interaction.user.id)
-        if existing:
+    @app_commands.describe(
+        user="Discord user to link",
+        username="Reddit username (without u/)",
+    )
+    @mod_only()
+    async def link_reddit(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User,
+        username: str,
+    ):
+        username = username.strip().lstrip("/").removeprefix("u/").strip()
+        if not USERNAME_RE.match(username):
             await interaction.response.send_message(
-                f"You're already linked to u/{existing}. "
-                "Use `/unlink-reddit` first if you want to change it.",
+                "That doesn't look like a valid Reddit username "
+                "(3-20 chars; letters, digits, `-`, `_`).",
                 ephemeral=True,
             )
             return
-        _cleanup_expired()
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        _pending[interaction.user.id] = PendingVerification(
-            discord_id=interaction.user.id,
-            code=code,
-            created_at=time.monotonic(),
-        )
+
+        existing_other = await _get_discord_id_for_reddit(username)
+        if existing_other and existing_other != user.id:
+            await interaction.response.send_message(
+                f"u/{username} is already linked to another Discord user "
+                f"(<@{existing_other}>).",
+                ephemeral=True,
+                allowed_mentions=NO_PINGS,
+            )
+            return
+
+        existing_self = await _get_reddit_username(user.id)
+        await _set_reddit_username(user.id, username)
+
+        if existing_self:
+            note = f" (was u/{existing_self})"
+        else:
+            note = ""
         await interaction.response.send_message(
-            f"Your one-time code: **{code}** (valid 10 minutes).\n\n"
-            "Go to **r/FriendsOver40** on Reddit, click the subreddit menu (`...`), "
-            "select **Link Discord account**, and paste the code into the form.\n\n"
-            "Once you submit it, your Discord account will be linked automatically.",
+            f"Linked {user.mention} to u/{username}{note}.",
             ephemeral=True,
+            allowed_mentions=NO_PINGS,
         )
         log.info(
-            "verification code issued for discord=%s",
-            interaction.user.id,
+            "manual link by %s: discord=%s reddit=u/%s",
+            interaction.user.id, user.id, username,
         )
 
     @app_commands.command(
         name="unlink-reddit",
-        description="Remove your Reddit account link",
+        description="Remove a Discord user's Reddit link (mods/admins only)",
     )
-    @forty_plus_only()
-    async def unlink_reddit(self, interaction: discord.Interaction):
-        existing = await _get_reddit_username(interaction.user.id)
+    @app_commands.describe(user="Discord user to unlink")
+    @mod_only()
+    async def unlink_reddit(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User,
+    ):
+        existing = await _get_reddit_username(user.id)
         if not existing:
             await interaction.response.send_message(
-                "You don't have a Reddit account linked.",
+                f"{user.mention} has no linked Reddit account.",
                 ephemeral=True,
+                allowed_mentions=NO_PINGS,
             )
             return
-        await _set_reddit_username(interaction.user.id, None)
+        await _set_reddit_username(user.id, None)
         await interaction.response.send_message(
-            f"Unlinked u/{existing}.",
+            f"Unlinked {user.mention} from u/{existing}.",
             ephemeral=True,
+            allowed_mentions=NO_PINGS,
         )
-        log.info("unlinked: discord=%s reddit=u/%s", interaction.user.id, existing)
+        log.info(
+            "manual unlink by %s: discord=%s reddit=u/%s",
+            interaction.user.id, user.id, existing,
+        )
 
     @app_commands.command(
         name="reddit-status",
@@ -214,24 +373,12 @@ class RedditSyncCog(commands.Cog):
             allowed_mentions=NO_PINGS,
         )
 
-    # ----- Bridge listener -----
+    # ----- Bridge listener (ban relay) -----
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Diagnostic: log every message in the bridge channel regardless of
-        # webhook filter, so we can see what the bot is actually receiving.
-        if message.channel.id == settings.bridge_channel_id:
-            log.info(
-                "bridge msg seen: webhook_id=%s expected=%s match=%s embeds=%d titles=%s",
-                message.webhook_id,
-                settings.bridge_webhook_id,
-                message.webhook_id == settings.bridge_webhook_id,
-                len(message.embeds),
-                [e.title for e in message.embeds],
-            )
-        # Only listen in the configured bridge channel, and only to messages
-        # from the configured webhook (other webhooks or human messages in
-        # that channel are ignored).
+        if not (settings.bridge_channel_id and settings.bridge_webhook_id):
+            return
         if message.channel.id != settings.bridge_channel_id:
             return
         if message.webhook_id != settings.bridge_webhook_id:
@@ -240,8 +387,6 @@ class RedditSyncCog(commands.Cog):
             title = (embed.title or "").strip()
             if title == "[fo40-bridge] ban":
                 await self._handle_ban_event(embed)
-            elif title == "[fo40-bridge] verify":
-                await self._handle_verify_event(embed)
             else:
                 log.warning("unknown bridge embed title: %r", title)
 
@@ -322,62 +467,6 @@ class RedditSyncCog(commands.Cog):
             reason=reason,
         )
 
-    async def _handle_verify_event(self, embed: discord.Embed):
-        fields = {f.name: f.value for f in embed.fields}
-        reddit_username = (fields.get("reddit_username") or "").strip()
-        code = (fields.get("code") or "").strip()
-        if not reddit_username or not code:
-            log.warning("verify embed missing fields")
-            return
-
-        _cleanup_expired()
-        # Find pending entry by code (constant-time-ish comparison via secrets).
-        match: tuple[int, PendingVerification] | None = None
-        for discord_id, p in _pending.items():
-            if secrets.compare_digest(p.code, code):
-                match = (discord_id, p)
-                break
-        if match is None:
-            log.info(
-                "verify event with unknown/expired code from u/%s",
-                reddit_username,
-            )
-            return
-        discord_id, _p = match
-
-        # Reddit username already linked to someone else?
-        existing_owner = await _get_discord_id_for_reddit(reddit_username)
-        if existing_owner is not None and existing_owner != discord_id:
-            log.info(
-                "u/%s already linked to discord=%s; refusing to relink",
-                reddit_username, existing_owner,
-            )
-            await self._dm_user(
-                discord_id,
-                f"u/{reddit_username} is already linked to a different Discord user. "
-                "Linking failed.",
-            )
-            _pending.pop(discord_id, None)
-            return
-
-        await _set_reddit_username(discord_id, reddit_username)
-        _pending.pop(discord_id, None)
-        log.info("linked: discord=%s reddit=u/%s", discord_id, reddit_username)
-        await self._dm_user(
-            discord_id,
-            f"Your Discord account is now linked to u/{reddit_username}. "
-            "If they're banned on r/FriendsOver40, you'll be auto-banned here too.",
-        )
-
-    # ----- Helpers -----
-
-    async def _dm_user(self, discord_id: int, content: str):
-        try:
-            user = self.bot.get_user(discord_id) or await self.bot.fetch_user(discord_id)
-            await user.send(content, allowed_mentions=NO_PINGS)
-        except discord.HTTPException:
-            log.exception("failed to DM user %s", discord_id)
-
     async def _post_modlog_embed(
         self,
         *,
@@ -408,11 +497,14 @@ class RedditSyncCog(commands.Cog):
             log.exception("failed to post modlog embed")
 
 
+class _DeletedInvite:
+    """Minimal stand-in for a discord.Invite when we only know the code
+    (because the invite was a one-use that got deleted upon consumption)."""
+    __slots__ = ("code",)
+
+    def __init__(self, code: str):
+        self.code = code
+
+
 async def setup(bot: commands.Bot):
-    if not settings.bridge_channel_id or not settings.bridge_webhook_id:
-        log.info(
-            "BRIDGE_CHANNEL_ID and/or BRIDGE_WEBHOOK_ID not set; reddit_sync disabled. "
-            "See reddit_devvit/README.md for setup."
-        )
-        return
     await bot.add_cog(RedditSyncCog(bot))

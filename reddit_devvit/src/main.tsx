@@ -1,18 +1,29 @@
 /**
  * fo40-bridge — Devvit app for r/FriendsOver40
  *
- * Relays two kinds of events to a Discord webhook:
- *   1. ModAction (banuser): when a Reddit mod bans a user, post a "ban"
- *      embed to Discord. The Discord bot picks it up and bans the linked
- *      Discord user.
- *   2. Verification: when a Reddit user clicks "Link Discord account" in the
- *      subreddit menu and pastes their Discord-side code, post a "verify"
- *      embed. The Discord bot matches the code to a pending verification
- *      and writes the link.
+ * Two integrations with the FriendsOver40 Discord bot:
  *
- * The Discord webhook URL is stored in app settings (set per-install by
- * a moderator). discord.com is on Devvit's global fetch allowlist; no
- * per-app domain approval needed.
+ *   1. Modlog ban relay. Listens for `ModAction` triggers and POSTs banuser
+ *      events to a Discord webhook URL stored in the install setting
+ *      `discord_webhook_url`. The Discord bot reads them from a private
+ *      bridge channel and bans the linked Discord user.
+ *
+ *   2. Invite-link join flow. Provides a "Get Discord invite" custom post
+ *      type. When a logged-in Reddit user clicks the button on that post,
+ *      this app signs an HMAC token containing their Reddit username and
+ *      navigates them to the bot's web server (`bot_join_url`). The bot
+ *      verifies the signature, creates a one-time-use Discord invite, and
+ *      redirects to discord.gg/<code>. On member join, the bot links the
+ *      Discord account to the Reddit username and assigns the 40+ role.
+ *
+ * Settings (per-install, configured by the subreddit's mods):
+ *   discord_webhook_url  — Discord webhook URL of the bridge channel
+ *   signing_secret       — shared HMAC secret with the Discord bot
+ *   bot_join_url         — public URL of the bot's web server (e.g.
+ *                          https://fo40.example.com/join)
+ *
+ * Mods create the "Join the Discord" pinned post via the subreddit menu
+ * item "Create Discord-join post (mods only)".
  */
 
 import { Devvit } from "@devvit/public-api";
@@ -22,31 +33,69 @@ Devvit.configure({
   http: true,
 });
 
+// Token TTL (seconds). Must match the bot's TOKEN_TTL_SECONDS.
+const TOKEN_TTL_SECONDS = 10 * 60;
+
 // ---------- Settings ----------
 
-// Installation-scoped: each subreddit that installs this app configures its
-// own webhook URL via the per-install settings page on Reddit. This lets
-// multiple subreddits (each with its own companion Discord server) install
-// the same app without sharing credentials.
-//
-// Note: Devvit only allows `isSecret: true` on app-scoped settings, so the
-// URL is stored in plaintext and is visible to subreddit moderators who
-// access the install settings page. That's acceptable — those mods are
-// the ones who configured it in the first place, and the page is restricted
-// to mods by Reddit's own permission system.
 Devvit.addSettings([
   {
     type: "string",
     name: "discord_webhook_url",
-    label: "Discord webhook URL",
+    label: "Discord webhook URL (ban relay)",
     helpText:
       "The webhook URL of the bridge channel in your Discord server. " +
-      "Create it in Channel Settings → Integrations → Webhooks.",
+      "Receives ModAction ban events. Create it in Channel Settings → " +
+      "Integrations → Webhooks.",
+    scope: "installation",
+  },
+  {
+    type: "string",
+    name: "signing_secret",
+    label: "Signing secret (invite-link flow)",
+    helpText:
+      "Shared HMAC secret for the invite-link flow. Must match " +
+      "BRIDGE_SIGNING_SECRET in the Discord bot's .env. Use a random " +
+      "string at least 32 chars long.",
+    scope: "installation",
+  },
+  {
+    type: "string",
+    name: "bot_join_url",
+    label: "Bot join URL (invite-link flow)",
+    helpText:
+      "Public URL of the Discord bot's /join endpoint, e.g. " +
+      "https://fo40.example.com/join . The 'Get Discord invite' button " +
+      "redirects users here with a signed token in the query string.",
     scope: "installation",
   },
 ]);
 
-async function postToDiscord(
+// ---------- HMAC signing ----------
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let str = "";
+  for (const b of bytes) str += String.fromCharCode(b);
+  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function signToken(payload: object, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const payloadBytes = enc.encode(JSON.stringify(payload));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sigBuf = await crypto.subtle.sign("HMAC", key, payloadBytes);
+  return `${bytesToBase64Url(payloadBytes)}.${bytesToBase64Url(new Uint8Array(sigBuf))}`;
+}
+
+// ---------- Modlog ban relay ----------
+
+async function postWebhook(
   webhookUrl: string,
   title: string,
   fields: { name: string; value: string; inline?: boolean }[],
@@ -67,8 +116,6 @@ async function postToDiscord(
     }),
   });
 }
-
-// ---------- ModAction trigger: relay bans to Discord ----------
 
 Devvit.addTrigger({
   event: "ModAction",
@@ -93,7 +140,7 @@ Devvit.addTrigger({
     const reason = (event.description ?? "").slice(0, 1024) || "(no reason)";
 
     try {
-      await postToDiscord(
+      await postWebhook(
         webhookUrl,
         "[fo40-bridge] ban",
         [
@@ -110,71 +157,102 @@ Devvit.addTrigger({
   },
 });
 
-// ---------- Verification flow: subreddit menu item + form ----------
+// ---------- Invite-link custom post ----------
 
-const linkForm = Devvit.createForm(
-  {
-    fields: [
-      {
-        type: "string",
-        name: "code",
-        label: "Discord code",
-        helpText:
-          "Paste the 6-digit code you got from `/link-reddit` in Discord.",
-        required: true,
-      },
-    ],
-    title: "Link your Discord account",
-    acceptLabel: "Link",
+async function handleJoinPress(context: Devvit.Context): Promise<void> {
+  const secret = (await context.settings.get("signing_secret")) as string | undefined;
+  const botUrl = (await context.settings.get("bot_join_url")) as string | undefined;
+
+  if (!secret || !botUrl) {
+    context.ui.showToast(
+      "This community's Discord link isn't fully set up yet. Tell a mod.",
+    );
+    return;
+  }
+
+  const user = await context.reddit.getCurrentUser();
+  const username = user?.username;
+  if (!username) {
+    context.ui.showToast(
+      "Couldn't read your Reddit username. Are you logged in?",
+    );
+    return;
+  }
+
+  try {
+    const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
+    const token = await signToken({ u: username, e: expiresAt }, secret);
+    const sep = botUrl.includes("?") ? "&" : "?";
+    const url = `${botUrl}${sep}token=${encodeURIComponent(token)}`;
+    context.ui.navigateTo(url);
+  } catch (err) {
+    console.error("[fo40-bridge] failed to issue join URL:", err);
+    context.ui.showToast("Couldn't create your invite right now. Try again in a moment.");
+  }
+}
+
+Devvit.addCustomPostType({
+  name: "Join Discord",
+  description:
+    "A pinned post inviting Reddit users to join the FriendsOver40 Discord. " +
+    "Clicking the button gives them a one-time-use invite that auto-verifies " +
+    "their Reddit identity on join.",
+  render: (context) => {
+    return (
+      <vstack
+        alignment="center middle"
+        gap="medium"
+        padding="large"
+        height="100%"
+        backgroundColor="#1a1a1a"
+      >
+        <text size="xxlarge" weight="bold" color="#ffffff">
+          Join the FriendsOver40 Discord
+        </text>
+        <text size="medium" color="#cccccc" wrap alignment="center">
+          A laid-back Discord server for friends 40+. Click below to get your
+          personal invite — your Reddit identity is linked automatically so the
+          mod team knows you're one of us.
+        </text>
+        <spacer size="small" />
+        <button
+          appearance="primary"
+          size="large"
+          onPress={async () => {
+            await handleJoinPress(context);
+          }}
+        >
+          Get Discord invite
+        </button>
+        <spacer size="small" />
+        <text size="small" color="#888888">
+          The link expires in 10 minutes and is single-use.
+        </text>
+      </vstack>
+    );
   },
-  async (event, context) => {
-    const code = (event.values.code as string | undefined)?.trim();
-    if (!code) {
-      context.ui.showToast("No code entered.");
-      return;
-    }
+});
 
-    const webhookUrl = (await context.settings.get(
-      "discord_webhook_url",
-    )) as string | undefined;
-    if (!webhookUrl) {
-      context.ui.showToast("Bridge not configured. Tell a mod.");
-      return;
-    }
-
-    const user = await context.reddit.getCurrentUser();
-    const username = user?.username;
-    if (!username) {
-      context.ui.showToast("Couldn't read your Reddit username — try again.");
-      return;
-    }
-
-    try {
-      await postToDiscord(
-        webhookUrl,
-        "[fo40-bridge] verify",
-        [
-          { name: "reddit_username", value: username, inline: true },
-          { name: "code", value: code, inline: true },
-        ],
-        0x3498db,
-      );
-      context.ui.showToast(
-        "Sent. Check Discord for a DM from the bot confirming the link.",
-      );
-    } catch (err) {
-      console.error("[fo40-bridge] failed to relay verify:", err);
-      context.ui.showToast("Couldn't reach Discord. Try again in a minute.");
-    }
-  },
-);
+// ---------- Mod helper: create the welcome post ----------
 
 Devvit.addMenuItem({
-  label: "Link Discord account",
+  label: "Create Discord-join post (mods only)",
   location: "subreddit",
-  forUserType: "loggedIn",
+  forUserType: "moderator",
   onPress: async (_event, context) => {
-    context.ui.showForm(linkForm);
+    const subreddit = await context.reddit.getCurrentSubreddit();
+    const post = await context.reddit.submitPost({
+      title: "Join the FriendsOver40 Discord",
+      subredditName: subreddit.name,
+      preview: (
+        <vstack alignment="center middle" gap="medium" padding="large">
+          <text size="xxlarge" weight="bold">Join the FriendsOver40 Discord</text>
+          <text>Loading…</text>
+        </vstack>
+      ),
+    });
+    context.ui.showToast(`Created post: ${post.title}. Pin it to your subreddit.`);
+    context.ui.navigateTo(post);
   },
 });
 

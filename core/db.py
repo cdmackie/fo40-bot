@@ -87,6 +87,13 @@ SCHEMA = [
         synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS pending_invites (
+        invite_code TEXT PRIMARY KEY,
+        reddit_username TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
     # Indexes for the common query patterns the cogs will use.
     "CREATE INDEX IF NOT EXISTS idx_mod_notes_user ON mod_notes(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_strikes_user ON strikes(user_id, expires_at)",

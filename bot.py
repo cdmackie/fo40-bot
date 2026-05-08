@@ -8,6 +8,7 @@ from discord.ext import commands
 
 from core import config, db
 from core.scheduling import get_scheduler
+from web import server as web_server
 
 
 settings = config.load()
@@ -47,6 +48,7 @@ class FO40Bot(commands.Bot):
         # mention-as-prefix as a no-op fallback; all real commands are slash.
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._disconnect_times: list[float] = []
+        self._web_runner = None
 
     async def setup_hook(self):
         await db.init_db()
@@ -55,6 +57,7 @@ class FO40Bot(commands.Bot):
             log.info("Loaded %s", cog)
         self.tree.on_error = _on_app_command_error
         get_scheduler().start()
+        self._web_runner = await web_server.start(self)
         # Sync slash commands to the guild for instant availability.
         # Commands default to global scope (~1hr Discord propagation), so copy
         # them into the guild's namespace first; then the guild sync pushes them
@@ -93,6 +96,11 @@ class FO40Bot(commands.Bot):
             await self.close()
 
     async def close(self):
+        if self._web_runner is not None:
+            try:
+                await self._web_runner.cleanup()
+            except Exception:
+                log.exception("web server cleanup failed")
         sched = get_scheduler()
         if sched.running:
             sched.shutdown(wait=False)

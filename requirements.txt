@@ -3,3 +3,4 @@ apscheduler>=3.10
 aiosqlite>=0.20
 PyYAML>=6.0
 python-dotenv>=1.0
+aiohttp>=3.9            # web server for the invite-link flow (also a transitive dep of discord.py)

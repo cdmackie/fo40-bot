@@ -8,7 +8,10 @@ This is a private tool for one community, not a general-purpose bot. It is hardc
 
 - **Scheduled channel control.** Opens/closes channels on a cron schedule, optionally purges messages on close, posts an open announcement to a chosen channel, and posts a configurable warning before close. Used for Selfie Sunday — the channel is hidden Mon–Sat, opens Sun 00:00 PT, closes and wipes Mon 00:00 PT.
 - **Mod notes & strikes.** `/note add|view|remove`, `/strike add|view`, `/history`. Severity 1 = warn (90-day expiry), 2 = timeout (1-28 days), 3 = ban (immediate). All actions logged to the configured mod-log channel.
-- **Reddit → Discord ban sync (via Devvit bridge).** `/link-reddit`, `/unlink-reddit`, `/reddit-status`. Members link their Reddit username by pasting a one-time code into a form on the subreddit (added by a companion Devvit app — see `reddit_devvit/`). When a Reddit mod bans a user, the Devvit app posts to a Discord webhook in a dedicated bridge channel; the bot reads it and bans the linked Discord user. One-way; Discord-side bans don't propagate to Reddit. The bot holds no Reddit credentials. Self-disables if `BRIDGE_CHANNEL_ID`/`BRIDGE_WEBHOOK_ID` aren't in `.env`.
+- **Reddit ↔ Discord integration (via Devvit + bot web server).** Two halves:
+  - **Invite-link join flow.** A pinned post on r/FriendsOver40 (see `reddit_devvit/`) has a "Get Discord invite" button. Clicking it signs the user's Reddit username with an HMAC token and redirects through the bot's web server, which creates a one-time-use Discord invite and sends them to discord.gg. On member join, the bot auto-links the Discord account to the Reddit username and assigns the `40+` role. **User experience: two clicks.**
+  - **Ban relay.** When a Reddit mod bans a user on r/FriendsOver40, the Devvit app posts to a private bridge channel on Discord; the bot reads it and bans the linked Discord user. One-way only.
+  - Mod commands: `/link-reddit`, `/unlink-reddit`, `/reddit-status` (manual link/unlink for edge cases).
 
 ## What it will do
 
@@ -90,7 +93,10 @@ fo40-bot/
 │   ├── __init__.py
 │   ├── scheduler.py    # generalized scheduled-channel controller
 │   ├── mod_notes.py    # /note, /strike, /history
-│   └── reddit_sync.py  # /link-reddit, /unlink-reddit + bridge listener
+│   └── reddit_sync.py  # /link-reddit (mod), /reddit-status, on_member_join, ban-relay listener
+├── web/
+│   ├── __init__.py
+│   └── server.py       # aiohttp server: GET /join issues one-time Discord invite from signed token
 └── reddit_devvit/      # companion Devvit app (TypeScript) — see its README
     ├── devvit.yaml
     ├── package.json

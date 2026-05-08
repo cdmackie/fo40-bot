@@ -69,12 +69,15 @@ fo40-bot/
 │   ├── __init__.py
 │   ├── scheduler.py       # IMPLEMENTED — generalised scheduled-channel controller
 │   ├── mod_notes.py       # IMPLEMENTED — /note, /strike, /history
-│   ├── reddit_sync.py     # IMPLEMENTED — Reddit→Discord ban sync via Devvit bridge
+│   ├── reddit_sync.py     # IMPLEMENTED — invite-link auto-verify + ban relay
 │   # Planned but not yet implemented:
 │   # ├── dm_reports.py
 │   # ├── reaction_roles.py
 │   # ├── prompts.py
 │   # └── birthdays.py
+├── web/                   # IMPLEMENTED
+│   ├── __init__.py
+│   └── server.py          # aiohttp server: GET /join handles invite-link tokens
 └── reddit_devvit/         # Companion Devvit app (TypeScript). Uploaded to Reddit;
     ├── devvit.yaml        # not run by this Python project. See its README.
     ├── package.json
@@ -285,13 +288,53 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 
 **Privacy:** Year is **never** stored. The schema enforces this.
 
-### 8.6 `cogs/reddit_sync.py` — Reddit → Discord ban sync via Devvit bridge (IMPLEMENTED)
+### 8.6 `cogs/reddit_sync.py` — Reddit ↔ Discord integration (IMPLEMENTED)
 
-**Purpose:** Mirror bans **one-way** from `r/FriendsOver40` to the Discord server. When a Reddit mod bans a user, that user is auto-banned on Discord (if they've linked their Reddit account). Discord-side bans do not propagate back to Reddit. Announcement mirroring is explicitly out of scope.
+**Two integrations, sharing a Devvit companion app:**
 
-**Architecture:** Reddit closed the script-app API path in late 2025 in favour of Devvit. Direct PRAW/asyncpraw access is no longer available. Instead, a companion Devvit app (in `reddit_devvit/`) handles all Reddit-side logic and posts events to a Discord webhook in a dedicated bridge channel. The bot listens via `on_message` for messages from that webhook and acts on them.
+#### A. Modlog ban relay (Reddit → Discord)
 
-The Devvit app's `discord_webhook_url` setting is **installation-scoped** — each subreddit that installs it configures its own webhook independently. This lets sister subreddits (e.g. r/FriendsOver40 and a hypothetical r/FriendsOver50) each install the same app and point it at their own Discord servers without sharing credentials.
+When a moderator bans a user on r/FriendsOver40, the Devvit app POSTs a structured embed to a Discord webhook in a private bridge channel. This cog's `on_message` listener picks it up and bans the linked Discord user. Discord-side bans do NOT propagate back to Reddit. Announcement mirroring is out of scope.
+
+#### B. Invite-link join flow (Reddit → Discord, with auto-verification)
+
+The Devvit app provides a custom post type "Join Discord" that mods pin to r/FriendsOver40. When a logged-in Reddit user clicks the post's button:
+
+1. The Devvit app reads their Reddit username and signs an HMAC-SHA256 token containing `{u: username, e: expiry}` using `signing_secret` (shared with the bot).
+2. Devvit `navigateTo`s `bot_join_url?token=...`, which is the bot's web server.
+3. The bot (`web/server.py`) verifies the signature and expiry.
+4. The bot creates a one-time-use Discord invite for `INVITE_CHANNEL_ID` (max_uses=1, max_age=10min) and stores `{invite_code: reddit_username}` in `pending_invites`.
+5. The bot redirects the browser to `https://discord.gg/<invite_code>`.
+6. The user joins Discord normally.
+7. The cog's `on_member_join` listener compares pre/post invite-use counts to identify which invite was used, looks up `pending_invites`, saves `users.reddit_username`, and assigns the `40+` role. The pending row is then deleted.
+
+User-facing experience: **two clicks** (the Reddit post button + Discord's "Accept invite" prompt). No slash commands, no codes, no forms. Reddit identity is auto-verified via Devvit's auth context.
+
+**Architecture rationale:** Reddit closed the script-app API path in late 2025 in favour of Devvit. Direct PRAW/asyncpraw access is no longer available. Devvit apps run sandboxed on Reddit but can POST to allowlisted external domains (`discord.com` is on the global allowlist; the bot's web server's domain doesn't need allowlisting because the Devvit app navigates the user's browser there rather than fetching server-to-server).
+
+All Devvit settings (`discord_webhook_url`, `signing_secret`, `bot_join_url`) are **installation-scoped** so multiple subreddits can install the same app and point it at their own Discord servers/bots independently.
+
+**Slash commands** (mod-only — users don't need to do anything; auto-link happens via the join flow):
+- `/link-reddit user:<user> username:<str>` — manually link a Discord user to a Reddit username (e.g. for users who joined via a different invite or whose auto-link failed).
+- `/unlink-reddit user:<user>` — remove a user's link.
+- `/reddit-status [user:<user>]` — show linked Reddit username (anyone for self; mods for others).
+
+**DB tables:** `users` (the link), `ban_sync_log`, `pending_invites` (transient mapping invite_code → reddit_username, consumed on member join).
+
+**Required env vars** (bot side, in `.env`):
+- `BRIDGE_CHANNEL_ID`, `BRIDGE_WEBHOOK_ID` — bridge channel + webhook for ban relay
+- `BRIDGE_SIGNING_SECRET` — shared HMAC secret with Devvit's `signing_secret`
+- `BOT_PUBLIC_URL` — public URL the bot serves on (must match Devvit's `bot_join_url`)
+- `WEB_SERVER_PORT` — local listen port (default 8080)
+- `INVITE_CHANNEL_ID` — channel new members are invited into
+
+The bot's web server self-disables if any of `BRIDGE_SIGNING_SECRET`, `INVITE_CHANNEL_ID`, or `BOT_PUBLIC_URL` is missing. The on_message bridge listener self-disables if either `BRIDGE_CHANNEL_ID` or `BRIDGE_WEBHOOK_ID` is missing.
+
+**Discord permissions the bot needs:**
+- `Create Instant Invite` on the invite channel (to create one-time invites)
+- `Manage Server` or `View Audit Log` on the guild (to list invites for the use-count comparison in `on_member_join`)
+- `Manage Roles` (to assign the 40+ role)
+- `Ban Members` (for ban relay)
 
 The bot itself has **no Reddit credentials** and makes **no Reddit API calls**.
 
@@ -316,34 +359,23 @@ For verification, the flow inverts: the user clicks "Link Discord account" in th
 - `REDDIT_PASSWORD`
 - `REDDIT_USER_AGENT` (e.g. `"fo40-bot/0.1 by u/<operator>"`)
 
-**Slash commands** (bot-side):
-- `/link-reddit` — `@forty_plus_only()`. Generates a 6-digit one-time code (10-min TTL). Tells the caller to go to r/FriendsOver40, click the subreddit menu's "Link Discord account" item (added by the Devvit app), and paste the code into the form there.
-- `/unlink-reddit` — `@forty_plus_only()`. Removes the calling user's link.
-- `/reddit-status [user:<user>]` — Shows the caller's linked Reddit username. Optional `user:` arg is mod-only for inspecting another member.
-
-**Webhook embed protocol** (set by the Devvit app, read by the bot):
+**Webhook embed protocol** (set by the Devvit app, read by the bot's `on_message` listener in the bridge channel):
 
 | `embed.title` | Fields | Action |
 | --- | --- | --- |
-| `[fo40-bridge] ban` | `reddit_username`, `moderator`, `reason` | Look up linked Discord user; ban with reason; log to `ban_sync_log` and `MOD_LOG_CHANNEL_ID`. If unmatched, log to `ban_sync_log` and post a heads-up. |
-| `[fo40-bridge] verify` | `reddit_username`, `code` | Match `code` against in-memory pending verifications; if found, write `users.reddit_username` and DM the Discord user. |
+| `[fo40-bridge] ban` | `reddit_username`, `moderator`, `reason` | Look up linked Discord user; ban with reason; log to `ban_sync_log` and `MOD_LOG_CHANNEL_ID`. If unmatched, log and post a heads-up. |
 
-The bot filters by both `message.channel.id == BRIDGE_CHANNEL_ID` and `message.webhook_id == BRIDGE_WEBHOOK_ID`, so other webhooks or human messages in the bridge channel are ignored.
+The bot filters by both `message.channel.id == BRIDGE_CHANNEL_ID` and `message.webhook_id == BRIDGE_WEBHOOK_ID`.
 
 **Out of scope:**
 - Discord-ban → Reddit-ban (outbound sync). Blast radius too high; mods can ban on Reddit manually if needed.
 - Announcement-flair post mirroring. Operator does not use this workflow.
-- Activity-based gating on `/link-reddit`.
-
-**DB tables:** `users` (for the link), `ban_sync_log`. Pending verifications live in-memory (lost on bot restart; user just runs `/link-reddit` again).
-
-**Graceful disable:** if `BRIDGE_CHANNEL_ID` or `BRIDGE_WEBHOOK_ID` is missing from `.env`, the cog logs a notice and skips loading. The bot still runs without the cog.
 
 **Caveats / risks:**
-- Identity verification depends on the Devvit app correctly reading `context.reddit.getCurrentUser()` for the Reddit username. The bot trusts this identification implicitly — it has no other way to validate the Reddit username matches the requesting user.
-- The Discord webhook URL is the trust boundary. Anyone with the URL can spoof ban/verify events. The bridge channel must be locked down so non-mods can't see (and thus can't read the webhook URL via the audit trail), and the URL must be stored only in the Devvit app's settings (which is encrypted at rest by Reddit).
-- The Devvit app being uninstalled or breaking is silent from the bot's perspective. If you stop seeing modlog posts, check the app's status at `https://developers.reddit.com/apps/fo40-bridge`.
-- Verification codes are 6 digits → 1-in-1M brute-force per attempt, with a 10-min TTL and one pending entry per Discord user. Acceptable but not bulletproof.
+- Identity verification depends on the Devvit app correctly reading `context.reddit.getCurrentUser()` for the Reddit username. The signing secret prevents URL forgery, but if Reddit's auth is compromised the chain breaks at that point.
+- The Discord webhook URL and the signing secret are the trust boundaries. Both must be stored only in the Devvit app's installation settings (encrypted at rest by Reddit) and the bot's `.env`.
+- If `BOT_PUBLIC_URL` becomes unreachable, the join button on Reddit fails for users; they see a Devvit toast. The Devvit ban relay is unaffected because it goes directly to Discord's webhook URL.
+- The bot needs to keep its invite cache in sync. After a restart it rebuilds from `Guild.invites()` on `on_ready`. Anyone joining during the brief window before `on_ready` may not get auto-linked; mods can use `/link-reddit` to fix.
 
 ---
 
