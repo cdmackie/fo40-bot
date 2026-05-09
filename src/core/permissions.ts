@@ -1,7 +1,7 @@
 import {
-  ChatInputCommandInteraction,
   GuildMember,
   MessageFlags,
+  RepliableInteraction,
 } from "discord.js";
 import { loadSettings } from "./config.js";
 
@@ -25,9 +25,10 @@ export function isFortyPlus(member: GuildMember): boolean {
 /**
  * Reject the interaction with an ephemeral message if the caller isn't a mod.
  * Returns true if rejected (caller should `return`); false if allowed.
+ * Works for any RepliableInteraction (slash commands, buttons, modals, etc).
  */
 export async function requireModerator(
-  interaction: ChatInputCommandInteraction,
+  interaction: RepliableInteraction,
 ): Promise<boolean> {
   const m = interaction.member;
   if (!(m instanceof GuildMember) || !isModerator(m)) {
@@ -41,7 +42,7 @@ export async function requireModerator(
 }
 
 export async function requireFortyPlus(
-  interaction: ChatInputCommandInteraction,
+  interaction: RepliableInteraction,
 ): Promise<boolean> {
   const m = interaction.member;
   if (!(m instanceof GuildMember) || !isFortyPlus(m)) {

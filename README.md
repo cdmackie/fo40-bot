@@ -8,6 +8,7 @@ This is a private tool for one community, not a general-purpose bot. It is hardc
 
 - **Scheduled channel control.** Opens/closes channels on a cron schedule, optionally purges messages on close, posts an open announcement to a chosen channel, and posts a configurable warning before close. Used for Selfie Sunday - the channel is hidden Mon–Sat, opens Sun 00:00 PT, closes and wipes Mon 00:00 PT.
 - **Mod notes & strikes.** `/note add|view|remove`, `/strike add|view`, `/history`. Severity 1 = warn (90-day expiry), 2 = timeout (1-28 days), 3 = ban (immediate). All actions logged to the configured mod-log channel.
+- **DM creeper reports.** `/report user:<member> context:<text>` (40+ only). Posts a triage card to the mod-log channel with one-click Dismiss / Add Note / Strike / Ban buttons. Strike and Add Note open modals; Ban executes immediately. Each report pings the mods role; no thresholds. Reports are text-only — no screenshot uploads. Cross-module: actions go through the same modNotes pipeline that powers `/note` and `/strike`, so they show up in `/history` too.
 - **Reddit ↔ Discord integration (via Devvit + bot web server).** Two halves:
   - **Invite-link join flow.** A pinned post on r/FriendsOver40 (see `reddit_devvit/`) has a "Get Discord invite" button. Clicking it signs the user's Reddit username with an HMAC token and redirects through the bot's web server, which creates a one-time-use Discord invite and sends them to discord.gg. On member join, the bot auto-links the Discord account to the Reddit username and assigns the `40+` role. **User experience: two clicks.**
   - **Ban relay.** When a Reddit mod bans a user on r/FriendsOver40, the Devvit app posts to a private bridge channel on Discord; the bot reads it and bans the linked Discord user. One-way only.
@@ -17,8 +18,7 @@ This is a private tool for one community, not a general-purpose bot. It is hardc
 
 In rough build order:
 
-1. **DM creeper reports** - `/report-dm` with screenshot attachment, mod queue with action buttons, auto-flag on repeat reports.
-2. **Reaction roles** - self-assignable timezones, interests, life stage.
+1. **Reaction roles** - self-assignable timezones, interests, life stage.
 3. **Daily prompts** - rotating conversation starter posted to a chosen channel.
 4. **Birthdays** - opt-in `/birthday set`, daily announcement, no year stored.
 
@@ -100,7 +100,8 @@ fo40-bot/
 │   ├── modules/          # one file per feature ("cogs")
 │   │   ├── scheduler.ts  # scheduled-channel controller
 │   │   ├── modNotes.ts   # /note, /strike, /history
-│   │   └── redditSync.ts # /link-reddit (mod), /reddit-status, member-join auto-link, ban-relay listener
+│   │   ├── redditSync.ts # /link-reddit (mod), /reddit-status, member-join auto-link, ban-relay listener
+│   │   └── dmReports.ts  # /report + mod queue with action buttons
 │   └── web/
 │       └── server.ts     # fastify: GET /join issues one-time Discord invite from signed token
 ├── package.json          # node deps + scripts

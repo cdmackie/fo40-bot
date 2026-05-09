@@ -15,11 +15,17 @@ import { BotModule, ModuleCommand } from "./core/types.js";
 import schedulerModule from "./modules/scheduler.js";
 import modNotesModule from "./modules/modNotes.js";
 import redditSyncModule from "./modules/redditSync.js";
+import dmReportsModule from "./modules/dmReports.js";
 import { startWebServer } from "./web/server.js";
 
 const settings = loadSettings();
 
-const MODULES: BotModule[] = [schedulerModule, modNotesModule, redditSyncModule];
+const MODULES: BotModule[] = [
+  schedulerModule,
+  modNotesModule,
+  redditSyncModule,
+  dmReportsModule,
+];
 
 // If we see this many gateway disconnects within the window, exit so we
 // don't keep hammering Discord and deepen any rate-limit ban.

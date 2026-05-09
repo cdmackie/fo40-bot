@@ -62,8 +62,8 @@ fo40-bot/
 │   │   ├── scheduler.ts   # IMPLEMENTED - generalised scheduled-channel controller
 │   │   ├── modNotes.ts    # IMPLEMENTED - /note, /strike, /history
 │   │   ├── redditSync.ts  # IMPLEMENTED - invite-link auto-verify + ban relay
+│   │   ├── dmReports.ts   # IMPLEMENTED - /report + mod queue with buttons
 │   │   # Planned but not yet implemented:
-│   │   # ├── dmReports.ts
 │   │   # ├── reactionRoles.ts
 │   │   # ├── prompts.ts
 │   │   # └── birthdays.ts
@@ -213,28 +213,30 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 - User parameters use `discord.User` (not `Member`) so commands work for users who have left or been banned.
 - Module-level helpers (`add_note`, `add_strike`, `get_history`, `log_action`, etc.) are exported so `dm_reports` can record actions through this cog rather than re-implementing the DB layer.
 
-### 8.2 `cogs/dm_reports.py` - DM creeper reports
+### 8.2 `src/modules/dmReports.ts` - DM creeper reports (IMPLEMENTED)
 
-**Purpose:** Allow members to report unsolicited or inappropriate DMs. Mods triage from a queue.
+**Purpose:** Allow members to report unsolicited or inappropriate DMs. Mods triage from a queue posted to `MOD_LOG_CHANNEL_ID`.
 
-**Slash commands:**
-- `/report-dm reported_user:<member> screenshot:<attachment> [context:<text>]` - `@forty_plus_only()`. Creates a `dm_reports` row with status `'open'`. Posts the report to a mod channel (configured via `dm_reports.mod_channel` in YAML) with action buttons.
-- `/dm-reports list [status:<open|reviewing|actioned|dismissed>]` - `@mod_only()`. Lists reports.
-- `/dm-reports show id:<int>` - `@mod_only()`. Shows full report.
+**Slash command** (40+ role only):
+- `/report user:<member> context:<text>` - both required. Creates a `dm_reports` row with status `'open'`. Posts the report to `MOD_LOG_CHANNEL_ID` with four action buttons and pings the moderator role.
 
-**Mod channel UI:** Use `discord.ui.View` with buttons:
-- Dismiss → status `'dismissed'`, log to mod-log channel.
-- Add Note → opens modal, calls into `mod_notes` to add a note on the reported user.
-- Strike → opens modal for severity + reason, calls into `mod_notes` to add a strike.
-- Ban → ban the reported user, status `'actioned'`.
+**Decisions made (resolved 2026-05-09):**
+- **Text-only reports.** No screenshot attachments. Mods can DM the reporter for further evidence if needed. Eliminates the screenshot-retention problem entirely.
+- **Notify on every report**, not at a threshold. Each report is independent; mod channel pings the `mods` role for each. No counter logic, no auto-flag.
+- **Field name `user:`** (not `reported_user:`) - reporter is implicit from interaction context.
+- **No confirm step on Ban button** - one click bans. Per operator's preference; mods can unban if needed.
 
-**Auto-flag:** When a user accumulates 3 open or actioned reports, post a high-priority alert in the mod channel pinging the moderator role. Threshold configurable via `dm_reports.auto_flag_threshold` in YAML.
+**Mod channel UI** (Discord buttons + modals):
+- **Dismiss** - one click, marks `'dismissed'`, edits embed to ACTIONED, removes buttons.
+- **Add Note** - opens modal with `note` text field; calls `modNotes.addNote()`; logs to mod channel; edits embed.
+- **Strike** - opens modal with `severity` (1/2/3), `reason`, optional `duration_days`; applies the appropriate Discord-side action (timeout for 2, ban for 3); calls `modNotes.addStrike()`; logs to mod channel; edits embed.
+- **Ban** - one click, immediate permanent ban; records as severity-3 strike for `/history`; logs; edits embed.
 
-**DB tables:** `dm_reports`, plus calls into `mod_notes`/`strikes`.
+After any action, the original report embed is edited in place to show "ACTIONED: \<decision\> by \<mod\>" and the buttons are removed. Each action also produces a separate mod-log embed describing the note/strike/ban.
 
-**Privacy / retention:**
-- Screenshots are stored as Discord CDN URLs (the attachment URL Discord returns when the user uploads). Do not download and re-host.
-- When a report is resolved (`'actioned'` or `'dismissed'`), keep the row but set `screenshot_url = NULL` after 30 days via a daily cleanup job, and edit the original mod-channel message to redact the image. This minimises long-term retention of sensitive imagery.
+**DB tables:** `dm_reports` (the report itself), plus cross-module calls into `users`, `mod_notes`, `strikes` via `modNotes` helpers (`addNote`, `addStrike`, `ensureUser`, `logAction`). The `screenshot_url` column exists but is unused.
+
+**Cross-module integration:** dmReports imports `modNotes` helpers directly. This is the canonical example of why `modNotes` exposes its DB helpers as exported functions rather than just slash commands.
 
 ### 8.3 `cogs/reaction_roles.py` - Self-assignable roles
 
