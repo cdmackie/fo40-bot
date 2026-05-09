@@ -122,14 +122,6 @@ Devvit.addTrigger({
   onEvent: async (event, context) => {
     if (event.action !== "banuser") return;
 
-    // Diagnostic: log all the fields Reddit gives us so we can pick the
-    // right one for the human-typed ban reason. Will be removed once we
-    // confirm which field holds it.
-    console.log(
-      "[fo40-bridge] full ban event:",
-      JSON.stringify(event, null, 2),
-    );
-
     const webhookUrl = (await context.settings.get(
       "discord_webhook_url",
     )) as string | undefined;
@@ -145,16 +137,36 @@ Devvit.addTrigger({
     }
 
     const moderator = event.moderator?.name ?? "?";
-    // Try multiple fields - Reddit's ban form has several text fields and
-    // it's not 100% clear which maps to ModAction.description vs .details.
-    // Whichever has content, use it.
-    const rawReason =
-      // @ts-expect-error - probing for fields not in the type definition
-      (event.description as string | undefined) ??
-      // @ts-expect-error
-      (event.details as string | undefined) ??
-      "";
-    const reason = rawReason.slice(0, 1024) || "(no reason)";
+    // The ModAction trigger event doesn't include description/details for
+    // banuser. Reddit DOES expose them via the modlog REST endpoint
+    // (getModerationLog), so we fetch the most recent banuser entry for
+    // this target user and pull the reason from there. If the fetch fails
+    // or returns nothing (race, missing perms, etc.) we fall back to
+    // "(no reason)" so the ban is still mirrored.
+    const subredditName = event.subreddit?.name;
+    let reason = "(no reason)";
+    if (subredditName) {
+      try {
+        const subreddit = await context.reddit.getSubredditByName(subredditName);
+        const logListing = subreddit.getModerationLog({
+          type: "banuser",
+          limit: 25,
+        });
+        for await (const entry of logListing) {
+          if (entry.target?.author === targetUser) {
+            const desc = (entry.description ?? "").trim();
+            const det = (entry.details ?? "").trim();
+            const combined = [desc, det].filter(Boolean).join(": ");
+            if (combined) {
+              reason = combined.slice(0, 1024);
+            }
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn("[fo40-bridge] modlog reason fetch failed:", err);
+      }
+    }
 
     try {
       await postWebhook(
