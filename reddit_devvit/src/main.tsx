@@ -31,10 +31,49 @@ import { Devvit } from "@devvit/public-api";
 Devvit.configure({
   redditAPI: true,
   http: true,
+  redis: true,
 });
 
 // Token TTL (seconds). Must match the bot's TOKEN_TTL_SECONDS.
 const TOKEN_TTL_SECONDS = 10 * 60;
+
+// How long to remember "we already relayed this event" for trigger-burst
+// dedup. Reddit emits the same modaction 4-8x within a few seconds; we
+// only want to relay it once. 10 minutes is well above the burst window
+// while still letting the dedup keys expire so Redis doesn't grow.
+const DEDUP_TTL_SECONDS = 10 * 60;
+
+/**
+ * Returns true if this exact modaction event has already been relayed
+ * (and we should skip), false if this is the first sighting.
+ *
+ * Uses {action, targetUser, actionedAt} as the dedup key - Reddit's
+ * burst emissions all share the same actionedAt timestamp, so they
+ * hash to the same key.
+ */
+async function alreadyRelayed(
+  context: Devvit.Context,
+  action: string,
+  username: string,
+  actionedAt: unknown,
+): Promise<boolean> {
+  const ts = actionedAt instanceof Date
+    ? actionedAt.toISOString()
+    : typeof actionedAt === "string"
+      ? actionedAt
+      : "";
+  if (!ts) return false; // no timestamp - can't dedup; better to relay than drop
+  const key = `bridge:${action}:${username}:${ts}`;
+  try {
+    const count = await context.redis.exists(key);
+    if (count > 0) return true;
+    await context.redis.set(key, "1");
+    await context.redis.expire(key, DEDUP_TTL_SECONDS);
+  } catch (err) {
+    console.warn("[fo40-bridge] redis dedup failed; relaying anyway:", err);
+  }
+  return false;
+}
 
 // ---------- Settings ----------
 
@@ -135,6 +174,20 @@ Devvit.addTrigger({
       console.warn(
         `[fo40-bridge] ${event.action} event missing targetUser; skipping`,
       );
+      return;
+    }
+
+    // Dedup Reddit's 4-8x duplicate trigger emissions for the same logical
+    // action. Skip silently if we've already relayed this event - keeps
+    // the bridge channel clean.
+    if (
+      await alreadyRelayed(
+        context,
+        event.action,
+        targetUser,
+        event.actionedAt,
+      )
+    ) {
       return;
     }
 
