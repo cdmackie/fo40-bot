@@ -215,7 +215,7 @@ async function onMemberJoin(member: GuildMember): Promise<void> {
   } catch (err) {
     console.warn(
       `failed to set nickname for ${member.id} (likely missing Manage Nicknames ` +
-        `or modbot role isn't above the user's roles):`,
+        `or friends-bot role isn't above the user's roles):`,
       (err as Error).message,
     );
   }

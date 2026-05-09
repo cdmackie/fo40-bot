@@ -42,13 +42,13 @@ In rough build order:
 
 The bot expects these roles (names can differ - only the IDs in `.env` matter):
 
-- `modbot` - the bot's own role. Position above `@everyone`, below `mods`/`admins`.
+- `friends-bot` - the bot's own role. Position above `@everyone`, below `mods`/`admins`.
 - `mods` - moderator role. `@mod_only()` commands require this (or `admins`).
 - `admins` - admin role. Inherits mod privileges; also passes `@mod_only()`.
 - `40+` - access-gate role assigned via onboarding. `@forty_plus_only()` commands require this.
 - `underage` - assigned via onboarding to under-40 users. No special handling in code; lacking `40+` is what gates access.
 
-On every channel the bot will manage (e.g. `#selfie-sunday`), explicitly grant the `modbot` role: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, when the bot hides the channel from `@everyone`, it will lock itself out too.
+On every channel the bot will manage (e.g. `#selfie-sunday`), explicitly grant the `friends-bot` role: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, when the bot hides the channel from `@everyone`, it will lock itself out too.
 
 ### 3. Fill in `.env`
 
@@ -123,7 +123,7 @@ Each feature is a cog in `cogs/`. Cogs are independently loadable - disable one 
 
 ## Operational notes
 
-- **`modbot` role placement matters.** The `modbot` role must be above `@everyone` and have explicit allow on managed channels, or the bot will lock itself out when hiding channels.
+- **`friends-bot` role placement matters.** The `friends-bot` role must be above `@everyone` and have explicit allow on managed channels, or the bot will lock itself out when hiding channels.
 - **Don't grant Administrator.** Too much blast radius if the token leaks. Grant only the listed permissions.
 - **Timezones.** Cron schedules in `config.yaml` use the `timezone` field per entry. The codebase uses `zoneinfo` (Python 3.9+).
 - **Schema changes.** `core/db.py` runs idempotent CREATE statements on startup. For real schema changes later, add a migrations table and version-gated ALTERs.

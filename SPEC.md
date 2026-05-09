@@ -397,8 +397,8 @@ Do not build these. They have been considered and rejected:
 
 These are operator responsibilities, but new cogs may depend on them. Verify before building cogs that interact with channels or roles.
 
-1. **Bot role placement.** The `modbot` role exists, positioned above `@everyone` and below `mods`/`admins`. Do not grant Administrator.
-2. **Per-channel permissions for the bot.** On every channel the bot manages (e.g. `#selfie-sunday`), the `modbot` role is explicitly granted: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, hiding a channel from `@everyone` locks the bot out too.
+1. **Bot role placement.** The `friends-bot` role exists, positioned above `@everyone` and below `mods`/`admins`. Do not grant Administrator.
+2. **Per-channel permissions for the bot.** On every channel the bot manages (e.g. `#selfie-sunday`), the `friends-bot` role is explicitly granted: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, hiding a channel from `@everyone` locks the bot out too.
 3. **Existing role gating.** The server uses an onboarding question that assigns either `40+` or `underage`. The `40+` role is the access gate; `@everyone` has no channel access. Bot features that should require verified-age members use `@forty_plus_only()` (which checks for `40+`). The `underage` role needs no special handling - lacking `40+` is what gates access.
 4. **Privileged Gateway Intents.** Server Members Intent must be enabled in the Discord Developer Portal. Message Content Intent is currently **off** and should remain off unless a future cog genuinely needs to read message text.
 
