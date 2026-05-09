@@ -120,7 +120,7 @@ async function postWebhook(
 Devvit.addTrigger({
   event: "ModAction",
   onEvent: async (event, context) => {
-    if (event.action !== "banuser") return;
+    if (event.action !== "banuser" && event.action !== "unbanuser") return;
 
     const webhookUrl = (await context.settings.get(
       "discord_webhook_url",
@@ -132,11 +132,32 @@ Devvit.addTrigger({
 
     const targetUser = event.targetUser?.name;
     if (!targetUser) {
-      console.warn("[fo40-bridge] ban event missing targetUser; skipping");
+      console.warn(
+        `[fo40-bridge] ${event.action} event missing targetUser; skipping`,
+      );
       return;
     }
 
     const moderator = event.moderator?.name ?? "?";
+
+    if (event.action === "unbanuser") {
+      try {
+        await postWebhook(
+          webhookUrl,
+          "[fo40-bridge] unban",
+          [
+            { name: "reddit_username", value: targetUser, inline: true },
+            { name: "moderator", value: moderator, inline: true },
+          ],
+          0x2ecc71,
+        );
+        console.log(`[fo40-bridge] relayed unban: u/${targetUser}`);
+      } catch (err) {
+        console.error("[fo40-bridge] failed to relay unban:", err);
+      }
+      return;
+    }
+
     // The ModAction trigger event doesn't include description/details for
     // banuser. Reddit DOES expose them via the modlog REST endpoint
     // (getModerationLog), so we fetch the most recent banuser entry for

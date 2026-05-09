@@ -222,6 +222,8 @@ async function onMessage(client: Client, message: Message): Promise<void> {
     const title = (embed.title ?? "").trim();
     if (title === "[fo40-bridge] ban") {
       await handleBanEvent(client, embed);
+    } else if (title === "[fo40-bridge] unban") {
+      await handleUnbanEvent(client, embed);
     } else {
       console.warn(`unknown bridge embed title: ${JSON.stringify(title)}`);
     }
@@ -320,13 +322,70 @@ async function handleBanEvent(
   });
 }
 
+async function handleUnbanEvent(
+  client: Client,
+  embed: import("discord.js").Embed,
+): Promise<void> {
+  const fields: Record<string, string> = {};
+  for (const f of embed.fields) fields[f.name] = f.value;
+  const redditUsername = (fields["reddit_username"] ?? "").trim();
+  if (!redditUsername) {
+    console.warn("unban embed missing reddit_username");
+    return;
+  }
+
+  const discordId = getDiscordIdForReddit(redditUsername);
+  if (!discordId) {
+    // No linked Discord user. Log only - no mod-log embed since unbanning
+    // someone who was never linked is uneventful.
+    logBanSync("reddit_modlog", null, redditUsername, "unban-unlinked", "");
+    return;
+  }
+
+  const guild = client.guilds.cache.get(settings.guildId);
+  if (!guild) {
+    console.warn(`guild not in cache; can't mirror unban for u/${redditUsername}`);
+    return;
+  }
+
+  // Dedup: same as ban events, Reddit emits the same modaction multiple
+  // times. Only act if the user is actually currently banned on Discord.
+  const existingBan = await guild.bans.fetch(discordId).catch(() => null);
+  if (!existingBan) {
+    console.info(
+      `Discord ${discordId} not currently banned; skipping duplicate unban from u/${redditUsername}`,
+    );
+    return;
+  }
+
+  try {
+    await guild.bans.remove(discordId, `Reddit unban (u/${redditUsername})`);
+  } catch (err) {
+    console.warn(
+      `couldn't unban Discord ${discordId}: ${(err as Error).message}`,
+    );
+    logBanSync("reddit_modlog", discordId, redditUsername, "unban-failed", "");
+    return;
+  }
+
+  logBanSync("reddit_modlog", discordId, redditUsername, "unban", "");
+  console.info(`mirrored Reddit unban: u/${redditUsername} -> Discord ${discordId}`);
+  await postModlogEmbed(client, {
+    title: "Reddit unban mirrored",
+    description: "Discord ban removed automatically.",
+    color: 0x2ecc71,
+    redditUsername,
+    discordId,
+  });
+}
+
 interface ModlogEmbedArgs {
   title: string;
   description: string;
   color: number;
   redditUsername: string;
   discordId: string | null;
-  reason: string;
+  reason?: string;
 }
 
 async function postModlogEmbed(client: Client, args: ModlogEmbedArgs): Promise<void> {
@@ -346,11 +405,13 @@ async function postModlogEmbed(client: Client, args: ModlogEmbedArgs): Promise<v
   if (args.discordId !== null) {
     embed.addFields({ name: "Discord", value: `<@${args.discordId}>`, inline: true });
   }
-  embed.addFields({
-    name: "Reason",
-    value: args.reason || "(no reason)",
-    inline: false,
-  });
+  if (args.reason !== undefined) {
+    embed.addFields({
+      name: "Reason",
+      value: args.reason || "(no reason)",
+      inline: false,
+    });
+  }
   try {
     await channel.send({ embeds: [embed], allowedMentions: NO_PINGS });
   } catch (err) {
