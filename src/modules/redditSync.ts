@@ -259,6 +259,19 @@ async function handleBanEvent(
     console.warn(`guild not in cache; can't mirror ban for u/${redditUsername}`);
     return;
   }
+
+  // Reddit can emit the same modlog action multiple times (replication,
+  // related actions, etc.) so the same banuser event arrives 2-4x. Check
+  // if Discord has already banned them; if so, treat as a duplicate and
+  // skip both the redundant ban call and the duplicate mod-log post.
+  const existingBan = await guild.bans.fetch(discordId).catch(() => null);
+  if (existingBan) {
+    console.info(
+      `Discord ${discordId} already banned; skipping duplicate event from u/${redditUsername}`,
+    );
+    return;
+  }
+
   try {
     await guild.members.ban(discordId, { reason: `Reddit modlog: ${reason}` });
   } catch (err) {

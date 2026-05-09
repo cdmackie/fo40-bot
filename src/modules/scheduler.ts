@@ -41,7 +41,7 @@ class ScheduledChannel {
 
   private targetRole(guild: Guild): Role {
     if (this.cfg.gate_role_id) {
-      const role = guild.roles.cache.get(String(this.cfg.gate_role_id));
+      const role = guild.roles.cache.get(this.cfg.gate_role_id);
       if (role) return role;
       console.warn(
         `[${this.name}] gate_role_id ${this.cfg.gate_role_id} not found; falling back to @everyone`,
@@ -50,8 +50,8 @@ class ScheduledChannel {
     return guild.roles.everyone;
   }
 
-  private getChannel(guild: Guild, id: number): TextChannel | null {
-    const ch = guild.channels.cache.get(String(id));
+  private getChannel(guild: Guild, id: string): TextChannel | null {
+    const ch = guild.channels.cache.get(id);
     return ch?.isTextBased() && "permissionOverwrites" in ch
       ? (ch as TextChannel)
       : null;
