@@ -4,6 +4,12 @@ services:
     container_name: fo40-bot
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Inside the container, fastify must bind to 0.0.0.0 so Docker's
+      # port-forwarding (eth0 -> host) can reach it. The host-side mapping
+      # below pins the public surface to 127.0.0.1, so 0.0.0.0 inside the
+      # container is still effectively localhost-only from outside the host.
+      - WEB_SERVER_HOST=0.0.0.0
     # Expose the web server on localhost only - nginx in front (and
     # Cloudflare in front of that) handles public access. The HOST-side
     # port is configurable via FO40_HOST_PORT in .env so you can avoid
