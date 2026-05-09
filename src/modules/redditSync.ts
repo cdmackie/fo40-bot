@@ -186,10 +186,30 @@ async function onMemberJoin(member: GuildMember): Promise<void> {
       console.error(`failed to assign 40+ role to ${member.id}:`, err);
     }
   }
+
+  // Set the server-specific nickname to their Reddit username so other
+  // members can match Discord faces to Reddit handles. Requires the
+  // 'Manage Nicknames' permission on the guild AND the bot's highest role
+  // ranked above the new member's highest role (Discord's hierarchy rule).
+  // Server owner is unrenameable by anyone, including bots.
+  try {
+    await member.setNickname(
+      redditUsername,
+      `linked Reddit account u/${redditUsername}`,
+    );
+  } catch (err) {
+    console.warn(
+      `failed to set nickname for ${member.id} (likely missing Manage Nicknames ` +
+        `or modbot role isn't above the user's roles):`,
+      (err as Error).message,
+    );
+  }
+
   try {
     await member.send(
       `Welcome to FriendsOver40! Your Discord account is now linked to u/${redditUsername} ` +
-        `and you have full access to the server.`,
+        `and you have full access to the server. ` +
+        `Your server nickname has been set to your Reddit username.`,
     );
   } catch {
     // DMs probably closed - nothing critical.
