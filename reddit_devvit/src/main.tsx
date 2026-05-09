@@ -63,12 +63,17 @@ async function alreadyRelayed(
       ? actionedAt
       : "";
   if (!ts) return false; // no timestamp - can't dedup; better to relay than drop
-  const key = `bridge:${action}:${username}:${ts}`;
+  const fieldName = `${action}:${username}:${ts}`;
+  const hashKey = "bridge-dedup";
   try {
-    const count = await context.redis.exists(key);
-    if (count > 0) return true;
-    await context.redis.set(key, "1");
-    await context.redis.expire(key, DEDUP_TTL_SECONDS);
+    // hSetNX is atomic: returns true if the field was newly set, false if
+    // it already existed. This wins the race when multiple duplicate
+    // emissions hit the dedup at the same instant - only one returns
+    // "newly set", the others return "already exists" and skip.
+    const wasNew = await context.redis.hSetNX(hashKey, fieldName, "1");
+    if (!wasNew) return true; // someone else already relayed this event
+    // Refresh hash expiry so old dedup entries eventually clean up.
+    await context.redis.expire(hashKey, DEDUP_TTL_SECONDS);
   } catch (err) {
     console.warn("[fo40-bridge] redis dedup failed; relaying anyway:", err);
   }
