@@ -36,6 +36,12 @@ export async function run(): Promise<void> {
       GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.GuildInvites,
+      // Required so the bridge channel listener can read webhook embed
+      // contents. Discord gates `embeds`, `attachments`, `components` and
+      // `content` together under MESSAGE_CONTENT (privileged). The bot
+      // application's "Message Content Intent" toggle in the developer
+      // portal must also be enabled, or the gateway will reject the IDENTIFY.
+      GatewayIntentBits.MessageContent,
     ],
   });
 
