@@ -94,6 +94,35 @@ function logBanSync(
     .run(source, userId, redditUsername, action, reason);
 }
 
+// ---------- Per-user event dedup (in-memory, time-bounded) ----------
+//
+// Reddit emits the same modaction event 4-8x in quick succession for one
+// logical ban or unban. The previous "is the user already banned/unbanned
+// on Discord?" check via guild.bans.fetch() is racy: multiple events read
+// the same state before any of them flips it, then they all proceed to
+// act, producing duplicate mod-log embeds and "Unknown Ban" errors.
+//
+// This map tracks "we've already started handling this action for this
+// user" with a short TTL. Setting and checking the map is synchronous, so
+// concurrent event handlers on the same event loop tick see the mark
+// before they reach an await and skip.
+
+const DEDUP_TTL_MS = 60_000;
+const recentlyHandled = new Map<string, number>();
+
+function alreadyHandled(key: string): boolean {
+  const now = Date.now();
+  // Opportunistic cleanup of expired entries.
+  for (const [k, expiresAt] of recentlyHandled) {
+    if (expiresAt < now) recentlyHandled.delete(k);
+  }
+  return recentlyHandled.has(key);
+}
+
+function markHandled(key: string): void {
+  recentlyHandled.set(key, Date.now() + DEDUP_TTL_MS);
+}
+
 // ---------- Used-invite detection ----------
 
 /**
@@ -243,6 +272,17 @@ async function handleBanEvent(
     console.warn("ban embed missing reddit_username");
     return;
   }
+  // Synchronous dedup BEFORE any await - prevents Reddit's 4-8x duplicate
+  // emissions from each producing a mod-log embed.
+  const dedupKey = `ban:${redditUsername.toLowerCase()}`;
+  if (alreadyHandled(dedupKey)) {
+    console.info(
+      `recently processed ban for u/${redditUsername}; skipping duplicate event`,
+    );
+    return;
+  }
+  markHandled(dedupKey);
+
   // Devvit's bulk-sync menu item sets moderator="(bulk sync)" so we can
   // suppress the per-user "no Discord link" mod-log embed for unlinked
   // users. Otherwise a 200-banned-user sync would post 200 noisy embeds
@@ -333,6 +373,14 @@ async function handleUnbanEvent(
     console.warn("unban embed missing reddit_username");
     return;
   }
+  const dedupKey = `unban:${redditUsername.toLowerCase()}`;
+  if (alreadyHandled(dedupKey)) {
+    console.info(
+      `recently processed unban for u/${redditUsername}; skipping duplicate event`,
+    );
+    return;
+  }
+  markHandled(dedupKey);
 
   const discordId = getDiscordIdForReddit(redditUsername);
   if (!discordId) {
