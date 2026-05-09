@@ -300,17 +300,28 @@ Devvit.addMenuItem({
   location: "subreddit",
   forUserType: "moderator",
   onPress: async (_event, context) => {
-    const subreddit = await context.reddit.getCurrentSubreddit();
+    // Use the subreddit name Devvit injects into the context based on
+    // where the menu was clicked. context.reddit.getCurrentSubreddit()
+    // can return the wrong sub in playtest contexts.
+    const subredditName = context.subredditName;
+    if (!subredditName) {
+      context.ui.showToast(
+        "Couldn't determine current subreddit. Try clicking the menu from the subreddit page directly.",
+      );
+      return;
+    }
     const post = await context.reddit.submitPost({
       title: "Join the FriendsOver40 Discord",
-      subredditName: subreddit.name,
+      subredditName,
       preview: (
         <vstack alignment="center middle" gap="medium" padding="large">
           <text>Loading…</text>
         </vstack>
       ),
     });
-    context.ui.showToast(`Created post: ${post.title}. Pin it to your subreddit.`);
+    context.ui.showToast(
+      `Created post in r/${subredditName}. Pin it to your subreddit.`,
+    );
     context.ui.navigateTo(post);
   },
 });
@@ -338,8 +349,17 @@ Devvit.addMenuItem({
       return;
     }
 
-    const subreddit = await context.reddit.getCurrentSubreddit();
-    context.ui.showToast("Syncing banned users to Discord. Watch the bridge channel.");
+    const subredditName = context.subredditName;
+    if (!subredditName) {
+      context.ui.showToast(
+        "Couldn't determine current subreddit. Try clicking the menu from the subreddit page directly.",
+      );
+      return;
+    }
+    const subreddit = await context.reddit.getSubredditByName(subredditName);
+    context.ui.showToast(
+      `Syncing banned users from r/${subredditName} to Discord. Watch the bridge channel.`,
+    );
 
     let sent = 0;
     let errors = 0;
