@@ -235,23 +235,31 @@ async function handleBanEvent(
   const fields: Record<string, string> = {};
   for (const f of embed.fields) fields[f.name] = f.value;
   const redditUsername = (fields["reddit_username"] ?? "").trim();
+  const moderator = (fields["moderator"] ?? "").trim();
   const reason = (fields["reason"] ?? "").trim().slice(0, 512);
   if (!redditUsername) {
     console.warn("ban embed missing reddit_username");
     return;
   }
+  // Devvit's bulk-sync menu item sets moderator="(bulk sync)" so we can
+  // suppress the per-user "no Discord link" mod-log embed for unlinked
+  // users. Otherwise a 200-banned-user sync would post 200 noisy embeds
+  // for the unlinked ones.
+  const isBulkSync = moderator === "(bulk sync)";
   const discordId = getDiscordIdForReddit(redditUsername);
   if (!discordId) {
     logBanSync("reddit_modlog", null, redditUsername, "unlinked", reason);
-    await postModlogEmbed(client, {
-      title: "Reddit ban - no Discord link",
-      description:
-        "Reddit banned this user, but no Discord member has linked this Reddit account. No automatic action taken.",
-      color: 0x95a5a6,
-      redditUsername,
-      discordId: null,
-      reason,
-    });
+    if (!isBulkSync) {
+      await postModlogEmbed(client, {
+        title: "Reddit ban - no Discord link",
+        description:
+          "Reddit banned this user, but no Discord member has linked this Reddit account. No automatic action taken.",
+        color: 0x95a5a6,
+        redditUsername,
+        discordId: null,
+        reason,
+      });
+    }
     return;
   }
   const guild = client.guilds.cache.get(settings.guildId);

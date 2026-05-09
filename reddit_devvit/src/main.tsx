@@ -294,4 +294,74 @@ Devvit.addMenuItem({
   },
 });
 
+// ---------- Bulk-sync banned users to Discord ----------
+//
+// The ModAction trigger only catches NEW bans after the bot is running.
+// Users banned before setup, or bans missed during downtime, won't propagate
+// without an explicit reconciliation. This menu item fetches the current
+// banned-users list and POSTs a ban event for each. The Discord bot's
+// "already banned on Discord, skip" dedup handles re-runs safely.
+
+Devvit.addMenuItem({
+  label: "Sync banned users to Discord (mods only)",
+  location: "subreddit",
+  forUserType: "moderator",
+  onPress: async (_event, context) => {
+    const webhookUrl = (await context.settings.get(
+      "discord_webhook_url",
+    )) as string | undefined;
+    if (!webhookUrl) {
+      context.ui.showToast(
+        "discord_webhook_url not configured. Set it in app install settings first.",
+      );
+      return;
+    }
+
+    const subreddit = await context.reddit.getCurrentSubreddit();
+    context.ui.showToast("Syncing banned users to Discord. Watch the bridge channel.");
+
+    let sent = 0;
+    let errors = 0;
+    try {
+      const bannedListing = subreddit.getBannedUsers({ limit: 1000 });
+      for await (const banned of bannedListing) {
+        try {
+          await postWebhook(
+            webhookUrl,
+            "[fo40-bridge] ban",
+            [
+              { name: "reddit_username", value: banned.username, inline: true },
+              { name: "moderator", value: "(bulk sync)", inline: true },
+              {
+                name: "reason",
+                value: "(bulk sync from banned-users list)",
+                inline: false,
+              },
+            ],
+            0xe74c3c,
+          );
+          sent += 1;
+        } catch (err) {
+          console.error(
+            `[fo40-bridge] sync: failed to relay ban for u/${banned.username}:`,
+            err,
+          );
+          errors += 1;
+        }
+      }
+    } catch (err) {
+      console.error("[fo40-bridge] sync: failed to list banned users:", err);
+      context.ui.showToast(
+        "Couldn't list banned users. Check that the app has 'access' permission.",
+      );
+      return;
+    }
+
+    console.log(`[fo40-bridge] bulk sync: ${sent} sent, ${errors} errors`);
+    context.ui.showToast(
+      `Bulk sync done: ${sent} ban events sent (${errors} errors).`,
+    );
+  },
+});
+
 export default Devvit;
