@@ -61,8 +61,21 @@ export async function run(): Promise<void> {
     }
   }
 
+  // Defends against duplicate event delivery (some discord.js versions or
+  // multi-instance setups can fire the same interaction twice). 5-min
+  // window is well over interaction TTL.
+  const seenInteractions = new Set<string>();
+  setInterval(() => seenInteractions.clear(), 5 * 60 * 1000).unref();
+
   client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     if (!interaction.isChatInputCommand()) return;
+    if (seenInteractions.has(interaction.id)) {
+      console.warn(
+        `duplicate InteractionCreate for ${interaction.commandName} (id=${interaction.id}); ignoring`,
+      );
+      return;
+    }
+    seenInteractions.add(interaction.id);
     const handler = commandHandlers.get(interaction.commandName);
     if (!handler) {
       await interaction

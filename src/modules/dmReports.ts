@@ -159,6 +159,12 @@ async function handleReport(
     return;
   }
 
+  // Defer immediately so the interaction is acked before any DB / Discord
+  // API work below. Without this, slow channel.send() calls can race
+  // against Discord's 3-second response deadline and any race-condition
+  // double-delivery would also fail with "interaction already acknowledged".
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const reportId = createReport(
     interaction.user.id,
     reportedUser.id,
@@ -169,10 +175,9 @@ async function handleReport(
     settings.modLogChannelId,
   );
   if (!channel?.isSendable()) {
-    await interaction.reply({
+    await interaction.editReply({
       content:
         "Couldn't post your report to the mod channel. A mod has been notified to investigate.",
-      flags: MessageFlags.Ephemeral,
     });
     console.error(
       `mod-log channel ${settings.modLogChannelId} not sendable; report ${reportId} dropped`,
@@ -199,11 +204,10 @@ async function handleReport(
 
   setReportMessageId(reportId, msg.id);
 
-  await interaction.reply({
+  await interaction.editReply({
     content:
       `Thanks - your report has been sent to the mods. They'll review and act on it. ` +
       `Reference: report #${reportId}.`,
-    flags: MessageFlags.Ephemeral,
     allowedMentions: NO_PINGS,
   });
   console.info(
@@ -483,6 +487,8 @@ async function submitNote(
   interaction: ModalSubmitInteraction,
   report: ReportRow,
 ): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const noteText = interaction.fields.getTextInputValue("note").trim();
   const noteId = addNote(report.reported_user_id, interaction.user.id, noteText);
   const decision = `note #${noteId} added by <@${interaction.user.id}>`;
@@ -515,9 +521,8 @@ async function submitNote(
     }
   }
 
-  await interaction.reply({
+  await interaction.editReply({
     content: `Note #${noteId} added on <@${report.reported_user_id}>.`,
-    flags: MessageFlags.Ephemeral,
     allowedMentions: NO_PINGS,
   });
 
