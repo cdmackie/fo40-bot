@@ -8,23 +8,28 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
   )`,
+  // All Discord-side IDs (snowflakes) are stored as TEXT, not INTEGER, to
+  // avoid JS Number precision loss - Discord snowflakes routinely exceed
+  // 2^53 and would round to the nearest representable double when read
+  // back via better-sqlite3's default Number conversion. Internal sequence
+  // IDs (mod_notes.id, strikes.id, etc.) stay INTEGER since they're small.
   `CREATE TABLE IF NOT EXISTS users (
-    discord_id INTEGER PRIMARY KEY,
+    discord_id TEXT PRIMARY KEY,
     reddit_username TEXT,
     joined_at TIMESTAMP,
     first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS mod_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    mod_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    mod_id TEXT NOT NULL,
     note TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS strikes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    mod_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    mod_id TEXT NOT NULL,
     severity INTEGER NOT NULL,
     reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -32,24 +37,24 @@ const SCHEMA = [
   )`,
   `CREATE TABLE IF NOT EXISTS dm_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    reporter_id INTEGER NOT NULL,
-    reported_user_id INTEGER NOT NULL,
+    reporter_id TEXT NOT NULL,
+    reported_user_id TEXT NOT NULL,
     screenshot_url TEXT,
     context TEXT,
     status TEXT DEFAULT 'open',
     mod_decision TEXT,
-    mod_channel_message_id INTEGER,
+    mod_channel_message_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS birthdays (
-    user_id INTEGER PRIMARY KEY,
+    user_id TEXT PRIMARY KEY,
     month INTEGER NOT NULL,
     day INTEGER NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS reaction_role_messages (
-    message_id INTEGER PRIMARY KEY,
-    channel_id INTEGER NOT NULL,
+    message_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
     config_json TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS prompts (
@@ -61,7 +66,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS ban_sync_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
-    user_id INTEGER,
+    user_id TEXT,
     reddit_username TEXT,
     action TEXT NOT NULL,
     reason TEXT,

@@ -56,8 +56,8 @@ function getDiscordIdForReddit(redditUsername: string): string | null {
     .prepare(
       `SELECT discord_id FROM users WHERE LOWER(reddit_username) = LOWER(?)`,
     )
-    .get(redditUsername) as { discord_id: number } | undefined;
-  return row ? String(row.discord_id) : null;
+    .get(redditUsername) as { discord_id: string } | undefined;
+  return row?.discord_id ?? null;
 }
 
 function setRedditUsername(discordId: string, redditUsername: string | null): void {

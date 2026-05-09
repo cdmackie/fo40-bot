@@ -45,11 +45,11 @@ export function addNote(userId: string, modId: string, note: string): number {
 
 export function removeNote(
   noteId: number,
-): { user_id: number; mod_id: number; note: string } | null {
+): { user_id: string; mod_id: string; note: string } | null {
   const db = getDb();
   const row = db
     .prepare(`SELECT user_id, mod_id, note FROM mod_notes WHERE id = ?`)
-    .get(noteId) as { user_id: number; mod_id: number; note: string } | undefined;
+    .get(noteId) as { user_id: string; mod_id: string; note: string } | undefined;
   if (!row) return null;
   db.prepare(`DELETE FROM mod_notes WHERE id = ?`).run(noteId);
   return row;
@@ -57,7 +57,7 @@ export function removeNote(
 
 interface NoteRow {
   id: number;
-  mod_id: number;
+  mod_id: string;
   note: string;
   created_at: string;
 }
@@ -72,7 +72,7 @@ export function getNotes(userId: string): NoteRow[] {
 
 interface StrikeRow {
   id: number;
-  mod_id: number;
+  mod_id: string;
   severity: number;
   reason: string | null;
   created_at: string;
@@ -117,7 +117,7 @@ interface HistoryRow {
   kind: string;
   id: number;
   created_at: string;
-  actor_id: number;
+  actor_id: string;
   detail: string;
   severity: number | null;
   status: string | null;
