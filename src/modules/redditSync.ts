@@ -29,6 +29,7 @@ import {
   Invite,
   Message,
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
 } from "discord.js";
 
@@ -469,10 +470,13 @@ async function postModlogEmbed(client: Client, args: ModlogEmbedArgs): Promise<v
 
 // ---------- Slash commands ----------
 
+// Hide manual mod commands from non-mods at the Discord UI level.
+// requireModerator() is still the actual access check.
 const linkRedditCmd = new SlashCommandBuilder()
   .setName("link-reddit")
   .setDescription("Manually link a Discord user to a Reddit username (mods/admins only)")
   .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addUserOption((o) =>
     o.setName("user").setDescription("Discord user to link").setRequired(true),
   )
@@ -487,6 +491,7 @@ const unlinkRedditCmd = new SlashCommandBuilder()
   .setName("unlink-reddit")
   .setDescription("Remove a Discord user's Reddit link (mods/admins only)")
   .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addUserOption((o) =>
     o.setName("user").setDescription("Discord user to unlink").setRequired(true),
   );

@@ -11,6 +11,7 @@ import {
   EmbedBuilder,
   GuildMember,
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   User,
   AllowedMentionsTypes,
@@ -181,10 +182,15 @@ function severityColor(sev: number): number {
 
 // ---------- Slash commands ----------
 
+// setDefaultMemberPermissions hides the command from users who lack the
+// listed Discord permission. It's a UX filter, not security - the bot's
+// requireModerator check is the actual access control. Pick ManageMessages
+// because every mod role has it.
 const noteCmd = new SlashCommandBuilder()
   .setName("note")
   .setDescription("Private mod notes on users")
   .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addSubcommand((sub) =>
     sub
       .setName("add")
@@ -220,6 +226,7 @@ const strikeCmd = new SlashCommandBuilder()
   .setName("strike")
   .setDescription("User strikes (warn / timeout / ban)")
   .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addSubcommand((sub) =>
     sub
       .setName("add")
@@ -265,6 +272,7 @@ const historyCmd = new SlashCommandBuilder()
   .setName("history")
   .setDescription("Combined moderation history for a user")
   .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addUserOption((o) =>
     o
       .setName("user")
