@@ -205,6 +205,17 @@ async function onMemberJoin(member: GuildMember): Promise<void> {
 
 async function onMessage(client: Client, message: Message): Promise<void> {
   if (!settings.bridgeChannelId || !settings.bridgeWebhookId) return;
+  // Diagnostic: log every message in the bridge channel so we can see
+  // whether the bot is receiving them and how the webhook-id filter compares.
+  if (message.channelId === settings.bridgeChannelId) {
+    console.info(
+      `bridge msg: channel=${message.channelId} webhook_id=${message.webhookId} ` +
+        `expected_webhook=${settings.bridgeWebhookId} ` +
+        `match=${message.webhookId === settings.bridgeWebhookId} ` +
+        `embeds=${message.embeds.length} ` +
+        `titles=${JSON.stringify(message.embeds.map((e) => e.title))}`,
+    );
+  }
   if (message.channelId !== settings.bridgeChannelId) return;
   if (!message.webhookId || message.webhookId !== settings.bridgeWebhookId) return;
   for (const embed of message.embeds) {
