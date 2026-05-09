@@ -94,64 +94,49 @@ function logBanSync(
     .run(source, userId, redditUsername, action, reason);
 }
 
-// ---------- Invite cache + on_member_join ----------
+// ---------- Used-invite detection ----------
 
-// invite_code -> uses count
-const inviteCache = new Map<string, number>();
-
-async function refreshInviteCache(client: Client): Promise<void> {
-  const guild = client.guilds.cache.get(settings.guildId);
-  if (!guild) return;
-  let invites: Collection<string, Invite>;
-  try {
-    invites = await guild.invites.fetch();
-  } catch (err) {
-    console.warn(
-      `can't list invites for ${guild.name}; auto-link disabled. ` +
-        `Grant 'Manage Server' or 'View Audit Log'. (${(err as Error).message})`,
-    );
-    return;
-  }
-  inviteCache.clear();
-  for (const inv of invites.values()) {
-    inviteCache.set(inv.code, inv.uses ?? 0);
-  }
-  console.info(`invite cache populated: ${inviteCache.size} invites`);
-}
-
+/**
+ * Find which of our pending invites the new member used.
+ *
+ * Uses `pending_invites` as the source of truth: every row there is an
+ * invite the bot issued via the /join flow. When a one-use invite is
+ * consumed, Discord deletes it, so it's missing from `guild.invites.fetch()`.
+ * We pick the most-recently-created pending invite that's no longer present
+ * (or that has uses > 0 for non-one-use cases).
+ *
+ * This avoids the race condition where Discord's INVITE_CREATE / INVITE_DELETE
+ * gateway events arrive AFTER GUILD_MEMBER_ADD, which would defeat any
+ * cache-based approach.
+ */
 async function identifyUsedInvite(
   member: GuildMember,
 ): Promise<string | null> {
+  const pending = getDb()
+    .prepare(`SELECT invite_code FROM pending_invites ORDER BY created_at DESC`)
+    .all() as { invite_code: string }[];
+  if (pending.length === 0) return null;
+
   let current: Collection<string, Invite>;
   try {
     current = await member.guild.invites.fetch();
   } catch (err) {
-    console.warn(`can't list invites in ${member.guild.name}: ${(err as Error).message}`);
+    console.warn(
+      `can't list invites in ${member.guild.name}: ${(err as Error).message}. ` +
+        `Grant 'Manage Server' or 'View Audit Log' to enable invite tracking.`,
+    );
     return null;
   }
-  let usedCode: string | null = null;
-  for (const inv of current.values()) {
-    const cached = inviteCache.get(inv.code) ?? 0;
-    if ((inv.uses ?? 0) > cached) {
-      usedCode = inv.code;
-      break;
+
+  for (const { invite_code } of pending) {
+    const inv = current.get(invite_code);
+    // Missing from current = one-use consumed (Discord deleted it on use).
+    // Or, present with uses > 0 = multi-use that someone consumed.
+    if (!inv || (inv.uses ?? 0) > 0) {
+      return invite_code;
     }
   }
-  if (!usedCode) {
-    // The used invite may be a one-use that got deleted upon consumption,
-    // so it's still in our cache but missing from `current`.
-    const currentCodes = new Set(current.keys());
-    for (const code of inviteCache.keys()) {
-      if (!currentCodes.has(code)) {
-        usedCode = code;
-        break;
-      }
-    }
-  }
-  // Refresh cache.
-  inviteCache.clear();
-  for (const inv of current.values()) inviteCache.set(inv.code, inv.uses ?? 0);
-  return usedCode;
+  return null;
 }
 
 async function onMemberJoin(member: GuildMember): Promise<void> {
@@ -474,19 +459,6 @@ const moduleDef: BotModule = {
   name: "redditSync",
   commands,
   init(client) {
-    client.on(Events.ClientReady, () => {
-      void refreshInviteCache(client);
-    });
-    client.on(Events.InviteCreate, (inv) => {
-      if (inv.guild?.id === settings.guildId) {
-        inviteCache.set(inv.code, inv.uses ?? 0);
-      }
-    });
-    client.on(Events.InviteDelete, (inv) => {
-      if (inv.guild?.id === settings.guildId) {
-        inviteCache.delete(inv.code);
-      }
-    });
     client.on(Events.GuildMemberAdd, (member) => {
       void onMemberJoin(member as GuildMember);
     });
