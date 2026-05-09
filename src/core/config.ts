@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { config as loadDotenv } from "dotenv";
 import { parse as parseYaml } from "yaml";
 
@@ -66,9 +66,23 @@ export function loadSettings(): Settings {
   if (cached) return cached;
 
   const yamlPath = "config.yaml";
-  const yamlData: YamlData = existsSync(yamlPath)
-    ? (parseYaml(readFileSync(yamlPath, "utf8")) as YamlData) ?? {}
-    : {};
+  let yamlData: YamlData = {};
+  try {
+    const stat = statSync(yamlPath);
+    if (stat.isFile()) {
+      yamlData = (parseYaml(readFileSync(yamlPath, "utf8")) as YamlData) ?? {};
+    } else {
+      console.warn(
+        `${yamlPath} exists but isn't a regular file (it's likely an empty ` +
+          `directory created by Docker because the host file was missing). ` +
+          `Continuing without config.yaml. Copy config.yaml.example to ` +
+          `config.yaml on the host and restart to fix.`,
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    // No config.yaml at all - that's fine, scheduler module just has nothing to schedule.
+  }
 
   cached = {
     discordToken: required("DISCORD_TOKEN"),

@@ -2,11 +2,11 @@
  * Scheduled-channel controller. Reads `scheduled_channels` from config.yaml
  * and registers open / close / warn cron jobs with the shared scheduler.
  *
- *   open  — grants the gate role view + send + read history on the channel;
+ *   open  - grants the gate role view + send + read history on the channel;
  *           optionally posts an announcement to a different channel
- *   close — revokes the gate role's view + send (channel becomes hidden);
+ *   close - revokes the gate role's view + send (channel becomes hidden);
  *           optionally purges all non-pinned messages
- *   warn  — derives a "N minutes before close" cron via shiftCron() and
+ *   warn  - derives a "N minutes before close" cron via shiftCron() and
  *           posts an in-channel warning + an optional announce-channel
  *           "closing soon" message
  */

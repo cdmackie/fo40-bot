@@ -99,7 +99,7 @@ export async function run(): Promise<void> {
     );
     if (disconnectTimes.length >= DISCONNECT_THRESHOLD) {
       console.error(
-        `${disconnectTimes.length} disconnects in ${DISCONNECT_WINDOW_SECS}s — doomed reconnect loop suspected. ` +
+        `${disconnectTimes.length} disconnects in ${DISCONNECT_WINDOW_SECS}s - doomed reconnect loop suspected. ` +
           "Shutting down to prevent rate-limit damage. Wait 10+ min and investigate before restarting.",
       );
       await shutdown(client);

@@ -94,7 +94,7 @@ export async function startWebServer(
     !settings.botPublicUrl
   ) {
     console.info(
-      "Invite-link web server NOT started — set BRIDGE_SIGNING_SECRET, " +
+      "Invite-link web server NOT started - set BRIDGE_SIGNING_SECRET, " +
         "INVITE_CHANNEL_ID, and BOT_PUBLIC_URL in .env to enable.",
     );
     return null;

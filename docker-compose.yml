@@ -4,11 +4,13 @@ services:
     container_name: fo40-bot
     restart: unless-stopped
     env_file: .env
-    # Expose the web server on localhost only — nginx/Cloudflare-Tunnel
-    # in front handles public access. Change to "8080:8080" if you want
-    # to publish to all interfaces.
+    # Expose the web server on localhost only - nginx in front (and
+    # Cloudflare in front of that) handles public access. The HOST-side
+    # port is configurable via FO40_HOST_PORT in .env so you can avoid
+    # collisions with other apps on the same machine. Container internally
+    # listens on 8080 regardless.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${FO40_HOST_PORT:-8080}:8080"
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro

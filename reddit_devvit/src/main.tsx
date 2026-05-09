@@ -1,5 +1,5 @@
 /**
- * fo40-bridge — Devvit app for r/FriendsOver40
+ * fo40-bridge - Devvit app for r/FriendsOver40
  *
  * Two integrations with the FriendsOver40 Discord bot:
  *
@@ -17,9 +17,9 @@
  *      Discord account to the Reddit username and assigns the 40+ role.
  *
  * Settings (per-install, configured by the subreddit's mods):
- *   discord_webhook_url  — Discord webhook URL of the bridge channel
- *   signing_secret       — shared HMAC secret with the Discord bot
- *   bot_join_url         — public URL of the bot's web server (e.g.
+ *   discord_webhook_url  - Discord webhook URL of the bridge channel
+ *   signing_secret       - shared HMAC secret with the Discord bot
+ *   bot_join_url         - public URL of the bot's web server (e.g.
  *                          https://fo40.example.com/join)
  *
  * Mods create the "Join the Discord" pinned post via the subreddit menu
@@ -198,36 +198,46 @@ Devvit.addCustomPostType({
     "Clicking the button gives them a one-time-use invite that auto-verifies " +
     "their Reddit identity on join.",
   render: (context) => {
+    // No explicit backgroundColor / colors - Devvit's neutral semantic tokens
+    // adapt automatically to the user's light or dark theme.
+    // Title text is omitted: the post title ("Join the FriendsOver40 Discord")
+    // already shows above the post body in Reddit's UI.
     return (
       <vstack
-        alignment="center middle"
+        alignment="start middle"
         gap="medium"
         padding="large"
         height="100%"
-        backgroundColor="#1a1a1a"
       >
-        <text size="xxlarge" weight="bold" color="#ffffff">
-          Join the FriendsOver40 Discord
+        <text size="medium" color="neutral-content-weak" wrap>
+          A Discord server operated by the mods of FriendsOver40 and
+          FriendsOver50. Click below to get your personal invite. We
+          automatically link your Reddit identity so the mods know you're
+          one of us.
         </text>
-        <text size="medium" color="#cccccc" wrap alignment="center">
-          A laid-back Discord server for friends 40+. Click below to get your
-          personal invite — your Reddit identity is linked automatically so the
-          mod team knows you're one of us.
+        <text size="medium" color="neutral-content-weak" wrap>
+          Reddit will ask you if you want to continue to an external site -
+          that's normal. The link goes to friendsover40.online, the domain
+          of our Reddit/Discord bot run by the mods, which links up your
+          account and creates your personal Discord server invite.
         </text>
         <spacer size="small" />
-        <button
-          appearance="primary"
-          size="large"
-          onPress={async () => {
-            await handleJoinPress(context);
-          }}
-        >
-          Get Discord invite
-        </button>
-        <spacer size="small" />
-        <text size="small" color="#888888">
-          The link expires in 10 minutes and is single-use.
-        </text>
+        <hstack alignment="center middle" width="100%">
+          <button
+            appearance="primary"
+            size="medium"
+            onPress={async () => {
+              await handleJoinPress(context);
+            }}
+          >
+            Get Discord invite
+          </button>
+        </hstack>
+        <hstack alignment="center middle" width="100%">
+          <text size="xsmall" color="neutral-content-weak">
+            One-time use · expires in 10 minutes
+          </text>
+        </hstack>
       </vstack>
     );
   },
@@ -246,7 +256,6 @@ Devvit.addMenuItem({
       subredditName: subreddit.name,
       preview: (
         <vstack alignment="center middle" gap="medium" padding="large">
-          <text size="xxlarge" weight="bold">Join the FriendsOver40 Discord</text>
           <text>Loading…</text>
         </vstack>
       ),

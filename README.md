@@ -2,11 +2,11 @@
 
 Self-hosted, single-guild moderation and engagement bot for the [r/FriendsOver40](https://www.reddit.com/r/FriendsOver40) companion Discord server.
 
-This is a private tool for one community, not a general-purpose bot. It is hardcoded to one guild, makes opinionated decisions for a 40+ friendship audience, and explicitly rejects features common to mainstream Discord bots (no XP/levels, no AI tone detection, no auto-moderating message content). If you want to fork it for your own server, **read [`SPEC.md`](SPEC.md) first** — the design rationale matters more than the code.
+This is a private tool for one community, not a general-purpose bot. It is hardcoded to one guild, makes opinionated decisions for a 40+ friendship audience, and explicitly rejects features common to mainstream Discord bots (no XP/levels, no AI tone detection, no auto-moderating message content). If you want to fork it for your own server, **read [`SPEC.md`](SPEC.md) first** - the design rationale matters more than the code.
 
 ## What it does (so far)
 
-- **Scheduled channel control.** Opens/closes channels on a cron schedule, optionally purges messages on close, posts an open announcement to a chosen channel, and posts a configurable warning before close. Used for Selfie Sunday — the channel is hidden Mon–Sat, opens Sun 00:00 PT, closes and wipes Mon 00:00 PT.
+- **Scheduled channel control.** Opens/closes channels on a cron schedule, optionally purges messages on close, posts an open announcement to a chosen channel, and posts a configurable warning before close. Used for Selfie Sunday - the channel is hidden Mon–Sat, opens Sun 00:00 PT, closes and wipes Mon 00:00 PT.
 - **Mod notes & strikes.** `/note add|view|remove`, `/strike add|view`, `/history`. Severity 1 = warn (90-day expiry), 2 = timeout (1-28 days), 3 = ban (immediate). All actions logged to the configured mod-log channel.
 - **Reddit ↔ Discord integration (via Devvit + bot web server).** Two halves:
   - **Invite-link join flow.** A pinned post on r/FriendsOver40 (see `reddit_devvit/`) has a "Get Discord invite" button. Clicking it signs the user's Reddit username with an HMAC token and redirects through the bot's web server, which creates a one-time-use Discord invite and sends them to discord.gg. On member join, the bot auto-links the Discord account to the Reddit username and assigns the `40+` role. **User experience: two clicks.**
@@ -17,10 +17,10 @@ This is a private tool for one community, not a general-purpose bot. It is hardc
 
 In rough build order:
 
-1. **DM creeper reports** — `/report-dm` with screenshot attachment, mod queue with action buttons, auto-flag on repeat reports.
-2. **Reaction roles** — self-assignable timezones, interests, life stage.
-3. **Daily prompts** — rotating conversation starter posted to a chosen channel.
-4. **Birthdays** — opt-in `/birthday set`, daily announcement, no year stored.
+1. **DM creeper reports** - `/report-dm` with screenshot attachment, mod queue with action buttons, auto-flag on repeat reports.
+2. **Reaction roles** - self-assignable timezones, interests, life stage.
+3. **Daily prompts** - rotating conversation starter posted to a chosen channel.
+4. **Birthdays** - opt-in `/birthday set`, daily announcement, no year stored.
 
 ## Setup
 
@@ -40,13 +40,13 @@ In rough build order:
 
 ### 2. Configure roles in Discord
 
-The bot expects these roles (names can differ — only the IDs in `.env` matter):
+The bot expects these roles (names can differ - only the IDs in `.env` matter):
 
-- `modbot` — the bot's own role. Position above `@everyone`, below `mods`/`admins`.
-- `mods` — moderator role. `@mod_only()` commands require this (or `admins`).
-- `admins` — admin role. Inherits mod privileges; also passes `@mod_only()`.
-- `40+` — access-gate role assigned via onboarding. `@forty_plus_only()` commands require this.
-- `underage` — assigned via onboarding to under-40 users. No special handling in code; lacking `40+` is what gates access.
+- `modbot` - the bot's own role. Position above `@everyone`, below `mods`/`admins`.
+- `mods` - moderator role. `@mod_only()` commands require this (or `admins`).
+- `admins` - admin role. Inherits mod privileges; also passes `@mod_only()`.
+- `40+` - access-gate role assigned via onboarding. `@forty_plus_only()` commands require this.
+- `underage` - assigned via onboarding to under-40 users. No special handling in code; lacking `40+` is what gates access.
 
 On every channel the bot will manage (e.g. `#selfie-sunday`), explicitly grant the `modbot` role: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, when the bot hides the channel from `@everyone`, it will lock itself out too.
 
@@ -79,7 +79,7 @@ For local development without Docker:
 
 ```bash
 npm install
-npm run dev    # tsx with watch — hot-reloads on changes
+npm run dev    # tsx with watch - hot-reloads on changes
 # or
 npm run build && npm start
 ```
@@ -112,13 +112,13 @@ fo40-bot/
 ├── .env                  # secrets, IDs (gitignored)
 ├── .env.example          # template
 ├── data/bot.db           # SQLite, persistent
-└── reddit_devvit/        # companion Devvit app (TypeScript) — see its README
+└── reddit_devvit/        # companion Devvit app (TypeScript) - see its README
     ├── devvit.yaml
     ├── package.json
     └── src/main.tsx
 ```
 
-Each feature is a cog in `cogs/`. Cogs are independently loadable — disable one by removing it from `INITIAL_COGS` in `bot.py`.
+Each feature is a cog in `cogs/`. Cogs are independently loadable - disable one by removing it from `INITIAL_COGS` in `bot.py`.
 
 ## Operational notes
 
@@ -130,7 +130,7 @@ Each feature is a cog in `cogs/`. Cogs are independently loadable — disable on
 
 ## Design rationale
 
-See [`SPEC.md`](SPEC.md) — the source of truth for what the bot does, why, and what is explicitly out of scope.
+See [`SPEC.md`](SPEC.md) - the source of truth for what the bot does, why, and what is explicitly out of scope.
 
 ## Companion Devvit app
 

@@ -1,11 +1,11 @@
-# fo40-bridge — Devvit app
+# fo40-bridge - Devvit app
 
 Companion Devvit app for the [FriendsOver40 Discord bot](../README.md). Two integrations:
 
 1. **Modlog ban relay.** When a mod bans a user on r/FriendsOver40, the app posts a structured embed to a Discord webhook. The bot reads it and bans the linked Discord user.
 2. **Invite-link join flow.** A pinned custom post on r/FriendsOver40 has a "Get Discord invite" button. When a Reddit user clicks it, the app signs an HMAC token containing their Reddit username and redirects them to the bot's web server, which creates a one-time-use Discord invite and sends the user to discord.gg. On member join, the bot auto-links the Discord account to the Reddit username and assigns the `40+` role.
 
-This app is **not intended for the public App Directory** — it's a private tool for r/FriendsOver40 (and any sister subs we install it on, e.g. r/FriendsOver50).
+This app is **not intended for the public App Directory** - it's a private tool for r/FriendsOver40 (and any sister subs we install it on, e.g. r/FriendsOver50).
 
 See [`PRIVACY.md`](PRIVACY.md) and [`TERMS.md`](TERMS.md) for the data-handling details required by Reddit's App Review.
 
@@ -23,10 +23,10 @@ For a Reddit user joining the Discord:
 
 This app only POSTs to `discord.com`, which is on Devvit's global fetch allowlist. JSON-encoded ban event embeds go to a Discord webhook URL stored in the install setting `discord_webhook_url`.
 
-The invite-link button does NOT use HTTP fetch — it navigates the user's browser to the Discord bot's public URL via `context.ui.navigateTo()`, which doesn't count as a fetch. (The token is signed in-app with HMAC-SHA256.)
+The invite-link button does NOT use HTTP fetch - it navigates the user's browser to the Discord bot's public URL via `context.ui.navigateTo()`, which doesn't count as a fetch. (The token is signed in-app with HMAC-SHA256.)
 
 Data sent:
-- Ban events: banned redditor's username, modlog moderator, ban reason — all already mod-visible on Reddit.
+- Ban events: banned redditor's username, modlog moderator, ban reason - all already mod-visible on Reddit.
 - Invite-link tokens (in URL query string): the user's Reddit username and an expiry timestamp, HMAC-signed with the shared secret.
 
 No PII beyond what's already on Reddit is transmitted.

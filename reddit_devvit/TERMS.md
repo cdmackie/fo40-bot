@@ -1,4 +1,4 @@
-# Terms of Use — fo40-bridge
+# Terms of Use - fo40-bridge
 
 Last updated: 2026-05-08
 

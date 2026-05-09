@@ -1,4 +1,4 @@
-# Privacy Policy — fo40-bridge
+# Privacy Policy - fo40-bridge
 
 Last updated: 2026-05-08
 
@@ -27,7 +27,7 @@ When a logged-in user clicks the "Link Discord account" menu item and submits th
 - The submitting user's Reddit username (read via `context.reddit.getCurrentUser()`)
 - A 6-digit one-time code that the user themselves types into the form
 
-This is voluntary on the user's part — the form is only submitted if the user explicitly fills it in and presses Submit.
+This is voluntary on the user's part - the form is only submitted if the user explicitly fills it in and presses Submit.
 
 ## What this app does NOT handle
 
@@ -55,7 +55,7 @@ fo40-bridge stores no user data itself. Once an event is forwarded to Discord, r
 ## Your rights
 
 - **Unlink at any time:** linked Discord users can run `/unlink-reddit` in the FriendsOver40 Discord server to remove the association.
-- **Opt out of verification:** simply don't click the "Link Discord account" menu item — there is no other way for the app to send verification data about you.
+- **Opt out of verification:** simply don't click the "Link Discord account" menu item - there is no other way for the app to send verification data about you.
 - **Ban-event data:** ban events are standard moderator actions covered by Reddit's moderator-data policies. Removal of any specific ban-event data already forwarded to Discord requires contacting an r/FriendsOver40 moderator via modmail.
 
 ## Contact

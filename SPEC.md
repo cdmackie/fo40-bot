@@ -1,4 +1,4 @@
-# FriendsOver40 Discord Bot — Specification
+# FriendsOver40 Discord Bot - Specification
 
 This document is the source of truth for the FriendsOver40 Discord bot project. It describes the goal, the design decisions already made, what is implemented, and what remains to be built. It is intended as a handoff doc for Claude Code (or any agent/developer) to continue building from.
 
@@ -9,7 +9,7 @@ This document is the source of truth for the FriendsOver40 Discord bot project. 
 A self-hosted, single-guild Discord bot for the **FriendsOver40 Discord server** (companion to the existing `r/FriendsOver40` subreddit). The bot exists to:
 
 - Reduce moderator workload through automation (scheduled channels, mod notes, strikes, ban-sync).
-- Protect a 40+ audience from problems disproportionately common in this demographic on social platforms — DM creepers, romance scammers, MLM solicitations.
+- Protect a 40+ audience from problems disproportionately common in this demographic on social platforms - DM creepers, romance scammers, MLM solicitations.
 - Promote engagement through opt-in, low-pressure features (daily prompts, birthdays, reaction roles).
 
 This is **not a product**. It is a private tool for one server. Customise freely; do not generalise for multi-guild use.
@@ -20,20 +20,20 @@ This is **not a product**. It is a private tool for one server. Customise freely
 
 Decisions throughout the codebase are informed by the fact that this serves a 40+ friendship (not dating) community. Specifically:
 
-- **Friends, not dating** — features must not encourage or facilitate dating-app behaviour.
-- **DM safety is paramount** — the demographic is targeted by creepers and scammers; the report flow is a flagship feature.
-- **No surveillance feel** — features that read message content for sentiment, tone, or crisis-phrase detection are explicitly out of scope. Older adults dislike feeling monitored, and false positives are worse than the problem they aim to solve.
-- **No gamification** — XP, levels, leaderboards, currency/economy bots are out of scope. The audience finds them childish.
-- **Quiet by default** — bot announcements are infrequent and intentional. The bot should not be a chatty presence.
+- **Friends, not dating** - features must not encourage or facilitate dating-app behaviour.
+- **DM safety is paramount** - the demographic is targeted by creepers and scammers; the report flow is a flagship feature.
+- **No surveillance feel** - features that read message content for sentiment, tone, or crisis-phrase detection are explicitly out of scope. Older adults dislike feeling monitored, and false positives are worse than the problem they aim to solve.
+- **No gamification** - XP, levels, leaderboards, currency/economy bots are out of scope. The audience finds them childish.
+- **Quiet by default** - bot announcements are infrequent and intentional. The bot should not be a chatty presence.
 
 ---
 
-## 3. Stack & architectural decisions (already made — do not relitigate)
+## 3. Stack & architectural decisions (already made - do not relitigate)
 
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Language / lib | Node.js 20+ + `discord.js@^14` | TypeScript-first, mature; matches operator's stack |
-| HTTP server | `fastify` (in-process with the bot) | Same Node process owns both the Discord gateway connection and the `/join` HTTP endpoint — single Docker container |
+| HTTP server | `fastify` (in-process with the bot) | Same Node process owns both the Discord gateway connection and the `/join` HTTP endpoint - single Docker container |
 | Database | SQLite via `better-sqlite3` (sync, fast at our scale) | Single file, zero ops, fits one-server scope |
 | Scheduling | `croner` | Cron expressions, IANA tz support, simple lifecycle |
 | Config | `.env` for secrets/IDs, `config.yaml` for runtime-tweakable values | Clean separation of "must restart" vs "edit and reload" |
@@ -50,7 +50,7 @@ Decisions throughout the codebase are informed by the fact that this serves a 40
 ```
 fo40-bot/
 ├── src/
-│   ├── index.ts           # Entry point — calls bot.run()
+│   ├── index.ts           # Entry point - calls bot.run()
 │   ├── bot.ts             # Discord Client + command registration + signal handling
 │   ├── core/
 │   │   ├── config.ts      # Settings interface, env + YAML loader
@@ -59,16 +59,16 @@ fo40-bot/
 │   │   ├── permissions.ts # isModerator/isFortyPlus + interaction guards
 │   │   └── types.ts       # BotModule interface
 │   ├── modules/           # One file per feature
-│   │   ├── scheduler.ts   # IMPLEMENTED — generalised scheduled-channel controller
-│   │   ├── modNotes.ts    # IMPLEMENTED — /note, /strike, /history
-│   │   ├── redditSync.ts  # IMPLEMENTED — invite-link auto-verify + ban relay
+│   │   ├── scheduler.ts   # IMPLEMENTED - generalised scheduled-channel controller
+│   │   ├── modNotes.ts    # IMPLEMENTED - /note, /strike, /history
+│   │   ├── redditSync.ts  # IMPLEMENTED - invite-link auto-verify + ban relay
 │   │   # Planned but not yet implemented:
 │   │   # ├── dmReports.ts
 │   │   # ├── reactionRoles.ts
 │   │   # ├── prompts.ts
 │   │   # └── birthdays.ts
 │   └── web/
-│       └── server.ts      # IMPLEMENTED — fastify server: GET /join handles invite-link tokens
+│       └── server.ts      # IMPLEMENTED - fastify server: GET /join handles invite-link tokens
 ├── package.json
 ├── tsconfig.json
 ├── Dockerfile             # node:20-alpine, multi-stage
@@ -90,18 +90,18 @@ fo40-bot/
 
 ### 5.1 Foundation (`core/`)
 
-**`core/db.py`** — defines the full schema for *all* features (current and planned) as idempotent `CREATE TABLE IF NOT EXISTS` statements run on startup via `init_db()`. Tables for unbuilt cogs already exist; new cogs should use them rather than redefining schema. Exposes `connect()` returning an `aiosqlite` context manager.
+**`core/db.py`** - defines the full schema for *all* features (current and planned) as idempotent `CREATE TABLE IF NOT EXISTS` statements run on startup via `init_db()`. Tables for unbuilt cogs already exist; new cogs should use them rather than redefining schema. Exposes `connect()` returning an `aiosqlite` context manager.
 
-**`core/config.py`** — `Settings` dataclass loaded from `.env` + `config.yaml`. Cached after first call. Access via `config.load()`. The `yaml_data` field on the dataclass holds the parsed YAML for cogs to read their own config sections from.
+**`core/config.py`** - `Settings` dataclass loaded from `.env` + `config.yaml`. Cached after first call. Access via `config.load()`. The `yaml_data` field on the dataclass holds the parsed YAML for cogs to read their own config sections from.
 
-**`core/scheduling.py`** — singleton `AsyncIOScheduler` accessed via `get_scheduler()`. Helper `cron_trigger(expr, tz)` builds a `CronTrigger` from a 5-field cron expression and IANA timezone name. The scheduler is started in `bot.py`'s `setup_hook`; cogs add jobs to it during their `cog_load`.
+**`core/scheduling.py`** - singleton `AsyncIOScheduler` accessed via `get_scheduler()`. Helper `cron_trigger(expr, tz)` builds a `CronTrigger` from a 5-field cron expression and IANA timezone name. The scheduler is started in `bot.py`'s `setup_hook`; cogs add jobs to it during their `cog_load`.
 
-**`core/permissions.py`** — exposes `is_moderator(member)`, `is_admin(member)`, `is_forty_plus(member)`, and the slash-command decorators `@mod_only()` and `@forty_plus_only()`. `is_moderator()` returns true for the `mods` **or** `admins` role; admins inherit mod privileges. The decorators raise `NotModerator` / `NotFortyPlus` (subclasses of `app_commands.CheckFailure`) on rejection; the global `tree.on_error` in `bot.py` catches these and sends an ephemeral message. New cogs **must** use these helpers rather than re-implementing role checks. Use `is_admin()` directly only for the rare command that admins-and-not-mods should run.
+**`core/permissions.py`** - exposes `is_moderator(member)`, `is_admin(member)`, `is_forty_plus(member)`, and the slash-command decorators `@mod_only()` and `@forty_plus_only()`. `is_moderator()` returns true for the `mods` **or** `admins` role; admins inherit mod privileges. The decorators raise `NotModerator` / `NotFortyPlus` (subclasses of `app_commands.CheckFailure`) on rejection; the global `tree.on_error` in `bot.py` catches these and sends an ephemeral message. New cogs **must** use these helpers rather than re-implementing role checks. Use `is_admin()` directly only for the rare command that admins-and-not-mods should run.
 
 ### 5.2 Entry point (`bot.py`)
 
 - Subclasses `commands.Bot` as `FO40Bot`.
-- Enables `intents.members`. `intents.message_content` is **off**; turn it on only if a future cog truly requires reading message text (most don't — slash commands work without it).
+- Enables `intents.members`. `intents.message_content` is **off**; turn it on only if a future cog truly requires reading message text (most don't - slash commands work without it).
 - `INITIAL_COGS` list controls which cogs load. **Add new cogs here** when implementing them.
 - Slash commands sync to the guild on startup (`tree.sync(guild=...)`) for instant availability.
 
@@ -109,9 +109,9 @@ fo40-bot/
 
 Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/close/warn jobs with the shared scheduler. For each entry:
 
-- **Open** — grants the gate role (default `@everyone`, configurable per channel via `gate_role_id`) view + send + read history on the channel; optionally posts an announcement to a different channel via `announce.open_message`.
-- **Close** — revokes the gate role's view + send (channel becomes hidden from members holding only that role); optionally purges all non-pinned messages via `channel.purge()`.
-- **Warn** — derives a "N minutes before close" cron via `_shift_cron()` and fires up to two messages: `announce.close_warning_message` posts inside the scheduled channel (warning the people present), and `announce.close_message` posts to the announce channel (broadcasting that close is imminent). Either or both may be set; the job is only registered if at least one is. The shift function handles minute/hour shifts that cross midnight back/forward by one day for numeric `dow` values, leaves `*` alone, and returns `None` for complex expressions.
+- **Open** - grants the gate role (default `@everyone`, configurable per channel via `gate_role_id`) view + send + read history on the channel; optionally posts an announcement to a different channel via `announce.open_message`.
+- **Close** - revokes the gate role's view + send (channel becomes hidden from members holding only that role); optionally purges all non-pinned messages via `channel.purge()`.
+- **Warn** - derives a "N minutes before close" cron via `_shift_cron()` and fires up to two messages: `announce.close_warning_message` posts inside the scheduled channel (warning the people present), and `announce.close_message` posts to the announce channel (broadcasting that close is imminent). Either or both may be set; the job is only registered if at least one is. The shift function handles minute/hour shifts that cross midnight back/forward by one day for numeric `dow` values, leaves `*` alone, and returns `None` for complex expressions.
 
 **Per-entry config keys:**
 | Key | Required | Purpose |
@@ -130,8 +130,8 @@ Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/cl
 | `announce.close_message` | no | Posted to the announce channel at warn time |
 
 **Class structure:**
-- `ScheduledChannel` — encapsulates open/warn/close behaviour for one configured channel.
-- `SchedulerCog` — discord.py Cog; on `cog_load`, instantiates a `ScheduledChannel` per YAML entry and registers jobs.
+- `ScheduledChannel` - encapsulates open/warn/close behaviour for one configured channel.
+- `SchedulerCog` - discord.py Cog; on `cog_load`, instantiates a `ScheduledChannel` per YAML entry and registers jobs.
 
 **Hardcoded behaviours:**
 - Hide-then-purge ordering on close (so users don't watch deletion happen).
@@ -153,7 +153,7 @@ All tables are defined in `core/db.py`. Tables for unbuilt cogs are already crea
 | Table | Status | Purpose |
 | --- | --- | --- |
 | `schema_version` | reserved | For future migration tracking; unused today |
-| `users` | implemented | Lazy-created user record (auto-created on first mod action via `INSERT OR IGNORE`); stores `reddit_username` for ban-sync. No denormalised counters — `SELECT COUNT(*)` on demand is cheap at this scale. |
+| `users` | implemented | Lazy-created user record (auto-created on first mod action via `INSERT OR IGNORE`); stores `reddit_username` for ban-sync. No denormalised counters - `SELECT COUNT(*)` on demand is cheap at this scale. |
 | `mod_notes` | schema ready | One row per private mod note attached to a user |
 | `strikes` | schema ready | One row per strike with severity (1=warn, 2=timeout, 3=ban), reason, optional `expires_at` |
 | `dm_reports` | schema ready | One row per `/report-dm` submission with status workflow. `mod_channel_message_id` tracks the posted mod-queue message so a later cleanup job can edit it for screenshot redaction. |
@@ -182,21 +182,21 @@ These match the patterns established in the implemented code. Follow them.
 
 ---
 
-## 8. Roadmap — cogs to build
+## 8. Roadmap - cogs to build
 
 Listed in recommended build order. Each entry specifies the purpose, slash command surface, DB tables, and implementation notes. Build one cog at a time, test, then move to the next.
 
-### 8.1 `cogs/mod_notes.py` — Mod notes & strikes (IMPLEMENTED)
+### 8.1 `cogs/mod_notes.py` - Mod notes & strikes (IMPLEMENTED)
 
 **Purpose:** Persistent, private record of moderator observations and disciplinary actions on users. Foundation for `dm_reports` and any future moderation feature.
 
 **Slash commands** (all `@mod_only()`, all responses ephemeral):
-- `/note add user:<user> note:<text>` — Adds a row to `mod_notes`.
-- `/note view user:<user>` — Replies with all notes on the user, newest first.
-- `/note remove note_id:<int>` — Deletes a specific note.
-- `/strike add user:<user> severity:<1|2|3> reason:<text> [duration_days:<int>]` — Records a strike. Severity 2 (timeout) requires `duration_days` (1-28; Discord's max). Severity 3 (ban) executes immediately — there is no confirmation step (decided 2026-05-08). The Discord-side action runs first; if it fails, no strike row is recorded.
-- `/strike view user:<user>` — Shows active strikes (`expires_at` null or future).
-- `/history user:<user>` — Combined chronological view: notes + strikes + dm_reports where user is reporter or reported.
+- `/note add user:<user> note:<text>` - Adds a row to `mod_notes`.
+- `/note view user:<user>` - Replies with all notes on the user, newest first.
+- `/note remove note_id:<int>` - Deletes a specific note.
+- `/strike add user:<user> severity:<1|2|3> reason:<text> [duration_days:<int>]` - Records a strike. Severity 2 (timeout) requires `duration_days` (1-28; Discord's max). Severity 3 (ban) executes immediately - there is no confirmation step (decided 2026-05-08). The Discord-side action runs first; if it fails, no strike row is recorded.
+- `/strike view user:<user>` - Shows active strikes (`expires_at` null or future).
+- `/history user:<user>` - Combined chronological view: notes + strikes + dm_reports where user is reporter or reported.
 
 **Severity → Discord action / expiry:**
 | Severity | Discord action | `expires_at` |
@@ -213,14 +213,14 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 - User parameters use `discord.User` (not `Member`) so commands work for users who have left or been banned.
 - Module-level helpers (`add_note`, `add_strike`, `get_history`, `log_action`, etc.) are exported so `dm_reports` can record actions through this cog rather than re-implementing the DB layer.
 
-### 8.2 `cogs/dm_reports.py` — DM creeper reports
+### 8.2 `cogs/dm_reports.py` - DM creeper reports
 
 **Purpose:** Allow members to report unsolicited or inappropriate DMs. Mods triage from a queue.
 
 **Slash commands:**
-- `/report-dm reported_user:<member> screenshot:<attachment> [context:<text>]` — `@forty_plus_only()`. Creates a `dm_reports` row with status `'open'`. Posts the report to a mod channel (configured via `dm_reports.mod_channel` in YAML) with action buttons.
-- `/dm-reports list [status:<open|reviewing|actioned|dismissed>]` — `@mod_only()`. Lists reports.
-- `/dm-reports show id:<int>` — `@mod_only()`. Shows full report.
+- `/report-dm reported_user:<member> screenshot:<attachment> [context:<text>]` - `@forty_plus_only()`. Creates a `dm_reports` row with status `'open'`. Posts the report to a mod channel (configured via `dm_reports.mod_channel` in YAML) with action buttons.
+- `/dm-reports list [status:<open|reviewing|actioned|dismissed>]` - `@mod_only()`. Lists reports.
+- `/dm-reports show id:<int>` - `@mod_only()`. Shows full report.
 
 **Mod channel UI:** Use `discord.ui.View` with buttons:
 - Dismiss → status `'dismissed'`, log to mod-log channel.
@@ -236,18 +236,18 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 - Screenshots are stored as Discord CDN URLs (the attachment URL Discord returns when the user uploads). Do not download and re-host.
 - When a report is resolved (`'actioned'` or `'dismissed'`), keep the row but set `screenshot_url = NULL` after 30 days via a daily cleanup job, and edit the original mod-channel message to redact the image. This minimises long-term retention of sensitive imagery.
 
-### 8.3 `cogs/reaction_roles.py` — Self-assignable roles
+### 8.3 `cogs/reaction_roles.py` - Self-assignable roles
 
 **Purpose:** Members assign themselves roles (timezone, interests, life stage, pronouns) by reacting to bot-posted messages.
 
 **Slash commands** (all `@mod_only()`):
-- `/rr-create channel:<channel> title:<text> description:<text>` — Posts an embed. Returns the message ID.
-- `/rr-add-role message_id:<int> emoji:<str> role:<role>` — Adds an emoji→role mapping to that message. Updates `reaction_role_messages.config_json`. Bot adds the reaction to the message.
-- `/rr-remove-role message_id:<int> emoji:<str>` — Reverse.
+- `/rr-create channel:<channel> title:<text> description:<text>` - Posts an embed. Returns the message ID.
+- `/rr-add-role message_id:<int> emoji:<str> role:<role>` - Adds an emoji→role mapping to that message. Updates `reaction_role_messages.config_json`. Bot adds the reaction to the message.
+- `/rr-remove-role message_id:<int> emoji:<str>` - Reverse.
 
 **Listeners:**
-- `on_raw_reaction_add` — if `payload.message_id` is in `reaction_role_messages` and the emoji maps to a role, add the role to the user.
-- `on_raw_reaction_remove` — reverse.
+- `on_raw_reaction_add` - if `payload.message_id` is in `reaction_role_messages` and the emoji maps to a role, add the role to the user.
+- `on_raw_reaction_remove` - reverse.
 
 **DB tables:** `reaction_role_messages` (config stored as JSON in `config_json`).
 
@@ -255,7 +255,7 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 - Use raw events (not `on_reaction_add`) so they fire for messages not in cache.
 - Ignore reactions from the bot itself.
 
-### 8.4 `cogs/prompts.py` — Daily conversation prompts
+### 8.4 `cogs/prompts.py` - Daily conversation prompts
 
 **Purpose:** Posts a rotating conversation prompt to a designated channel each day.
 
@@ -263,7 +263,7 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 - `/prompt add text:<str> [category:<str>]`
 - `/prompt remove id:<int>`
 - `/prompt list [category:<str>]`
-- `/prompt post-now` — fires the daily post immediately.
+- `/prompt post-now` - fires the daily post immediately.
 
 **Schedule:** APScheduler cron from `config.yaml` (`features.daily_prompt.cron`, `features.daily_prompt.timezone`). On fire, picks the prompt with the oldest `last_used` (NULL counts as oldest), posts it, updates `last_used`.
 
@@ -272,14 +272,14 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 **Notes:**
 - Initial prompt seeding can be done via `/prompt add` post-deploy, or by extending `db.init_db()` to insert a starter set if the table is empty.
 
-### 8.5 `cogs/birthdays.py` — Birthday tracking
+### 8.5 `cogs/birthdays.py` - Birthday tracking
 
 **Purpose:** Members opt in to birthday tracking; bot announces birthdays daily.
 
 **Slash commands:**
-- `/birthday set month:<1-12> day:<1-31>` — `@forty_plus_only()`. Validates the date (handle Feb 29 → store as Feb 28 with a note, or reject and require Feb 28). Upserts into `birthdays`.
-- `/birthday remove` — Deletes the user's row.
-- `/birthday today` — Lists members whose birthday is today (mod or anyone — your call; default to anyone).
+- `/birthday set month:<1-12> day:<1-31>` - `@forty_plus_only()`. Validates the date (handle Feb 29 → store as Feb 28 with a note, or reject and require Feb 28). Upserts into `birthdays`.
+- `/birthday remove` - Deletes the user's row.
+- `/birthday today` - Lists members whose birthday is today (mod or anyone - your call; default to anyone).
 
 **Schedule:** Daily cron from `config.yaml` (`features.birthdays.cron`, `features.birthdays.timezone`). Posts to the configured announce channel.
 
@@ -287,7 +287,7 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 
 **Privacy:** Year is **never** stored. The schema enforces this.
 
-### 8.6 `cogs/reddit_sync.py` — Reddit ↔ Discord integration (IMPLEMENTED)
+### 8.6 `cogs/reddit_sync.py` - Reddit ↔ Discord integration (IMPLEMENTED)
 
 **Two integrations, sharing a Devvit companion app:**
 
@@ -313,19 +313,19 @@ User-facing experience: **two clicks** (the Reddit post button + Discord's "Acce
 
 All Devvit settings (`discord_webhook_url`, `signing_secret`, `bot_join_url`) are **installation-scoped** so multiple subreddits can install the same app and point it at their own Discord servers/bots independently.
 
-**Slash commands** (mod-only — users don't need to do anything; auto-link happens via the join flow):
-- `/link-reddit user:<user> username:<str>` — manually link a Discord user to a Reddit username (e.g. for users who joined via a different invite or whose auto-link failed).
-- `/unlink-reddit user:<user>` — remove a user's link.
-- `/reddit-status [user:<user>]` — show linked Reddit username (anyone for self; mods for others).
+**Slash commands** (mod-only - users don't need to do anything; auto-link happens via the join flow):
+- `/link-reddit user:<user> username:<str>` - manually link a Discord user to a Reddit username (e.g. for users who joined via a different invite or whose auto-link failed).
+- `/unlink-reddit user:<user>` - remove a user's link.
+- `/reddit-status [user:<user>]` - show linked Reddit username (anyone for self; mods for others).
 
 **DB tables:** `users` (the link), `ban_sync_log`, `pending_invites` (transient mapping invite_code → reddit_username, consumed on member join).
 
 **Required env vars** (bot side, in `.env`):
-- `BRIDGE_CHANNEL_ID`, `BRIDGE_WEBHOOK_ID` — bridge channel + webhook for ban relay
-- `BRIDGE_SIGNING_SECRET` — shared HMAC secret with Devvit's `signing_secret`
-- `BOT_PUBLIC_URL` — public URL the bot serves on (must match Devvit's `bot_join_url`)
-- `WEB_SERVER_PORT` — local listen port (default 8080)
-- `INVITE_CHANNEL_ID` — channel new members are invited into
+- `BRIDGE_CHANNEL_ID`, `BRIDGE_WEBHOOK_ID` - bridge channel + webhook for ban relay
+- `BRIDGE_SIGNING_SECRET` - shared HMAC secret with Devvit's `signing_secret`
+- `BOT_PUBLIC_URL` - public URL the bot serves on (must match Devvit's `bot_join_url`)
+- `WEB_SERVER_PORT` - local listen port (default 8080)
+- `INVITE_CHANNEL_ID` - channel new members are invited into
 
 The bot's web server self-disables if any of `BRIDGE_SIGNING_SECRET`, `INVITE_CHANNEL_ID`, or `BOT_PUBLIC_URL` is missing. The on_message bridge listener self-disables if either `BRIDGE_CHANNEL_ID` or `BRIDGE_WEBHOOK_ID` is missing.
 
@@ -387,7 +387,7 @@ Do not build these. They have been considered and rejected:
 - **XP, levels, leaderboards, currency, economy bots.** The audience finds them childish.
 - **Ticket bot / support-thread complexity.** A simple `#mod-help` channel is sufficient for current scale.
 - **Multi-guild support.** This bot serves one server. Do not abstract for reuse.
-- **Auto-moderating message content** (slurs, spam patterns, etc.) — defer to Discord's built-in AutoMod feature for now.
+- **Auto-moderating message content** (slurs, spam patterns, etc.) - defer to Discord's built-in AutoMod feature for now.
 
 ---
 
@@ -397,7 +397,7 @@ These are operator responsibilities, but new cogs may depend on them. Verify bef
 
 1. **Bot role placement.** The `modbot` role exists, positioned above `@everyone` and below `mods`/`admins`. Do not grant Administrator.
 2. **Per-channel permissions for the bot.** On every channel the bot manages (e.g. `#selfie-sunday`), the `modbot` role is explicitly granted: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, hiding a channel from `@everyone` locks the bot out too.
-3. **Existing role gating.** The server uses an onboarding question that assigns either `40+` or `underage`. The `40+` role is the access gate; `@everyone` has no channel access. Bot features that should require verified-age members use `@forty_plus_only()` (which checks for `40+`). The `underage` role needs no special handling — lacking `40+` is what gates access.
+3. **Existing role gating.** The server uses an onboarding question that assigns either `40+` or `underage`. The `40+` role is the access gate; `@everyone` has no channel access. Bot features that should require verified-age members use `@forty_plus_only()` (which checks for `40+`). The `underage` role needs no special handling - lacking `40+` is what gates access.
 4. **Privileged Gateway Intents.** Server Members Intent must be enabled in the Discord Developer Portal. Message Content Intent is currently **off** and should remain off unless a future cog genuinely needs to read message text.
 
 ---

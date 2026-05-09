@@ -192,7 +192,7 @@ async function onMemberJoin(member: GuildMember): Promise<void> {
         `and you have full access to the server.`,
     );
   } catch {
-    // DMs probably closed — nothing critical.
+    // DMs probably closed - nothing critical.
   }
 }
 
@@ -228,7 +228,7 @@ async function handleBanEvent(
   if (!discordId) {
     logBanSync("reddit_modlog", null, redditUsername, "unlinked", reason);
     await postModlogEmbed(client, {
-      title: "Reddit ban — no Discord link",
+      title: "Reddit ban - no Discord link",
       description:
         "Reddit banned this user, but no Discord member has linked this Reddit account. No automatic action taken.",
       color: 0x95a5a6,
@@ -248,7 +248,7 @@ async function handleBanEvent(
   } catch (err) {
     const e = err as { code?: number; message?: string };
     if (e.code === 10007 /* Unknown Member */) {
-      console.info(`Discord ${discordId} not in guild — skipping ban mirror`);
+      console.info(`Discord ${discordId} not in guild - skipping ban mirror`);
       logBanSync(
         "reddit_modlog",
         discordId,
@@ -261,7 +261,7 @@ async function handleBanEvent(
     console.warn(`can't ban Discord ${discordId}: ${e.message}`);
     logBanSync("reddit_modlog", discordId, redditUsername, "failed-forbidden", reason);
     await postModlogEmbed(client, {
-      title: "Reddit ban — could not mirror",
+      title: "Reddit ban - could not mirror",
       description:
         "Reddit banned this user, but the bot couldn't ban them on Discord (missing permission or role hierarchy). Manual action needed.",
       color: 0xe67e22,

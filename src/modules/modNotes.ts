@@ -1,5 +1,5 @@
 /**
- * Mod notes & strikes — /note, /strike, /history slash commands.
+ * Mod notes & strikes - /note, /strike, /history slash commands.
  *
  * Module-level helpers (`addNote`, `addStrike`, `getHistory`, etc.) are
  * exported so other modules (e.g. dmReports later) can record mod actions
@@ -233,9 +233,9 @@ const strikeCmd = new SlashCommandBuilder()
           .setDescription("1 = warning, 2 = timeout, 3 = ban (immediate)")
           .setRequired(true)
           .addChoices(
-            { name: "1 — Warning", value: 1 },
-            { name: "2 — Timeout", value: 2 },
-            { name: "3 — Ban", value: 3 },
+            { name: "1 - Warning", value: 1 },
+            { name: "2 - Timeout", value: 2 },
+            { name: "3 - Ban", value: 3 },
           ),
       )
       .addStringOption((o) =>
@@ -410,7 +410,7 @@ async function handleStrikeAdd(
     const member = interaction.guild?.members.cache.get(user.id);
     if (!member) {
       await interaction.followUp({
-        content: `${user.toString()} isn't currently in the server — can't apply timeout. No strike recorded.`,
+        content: `${user.toString()} isn't currently in the server - can't apply timeout. No strike recorded.`,
         flags: MessageFlags.Ephemeral,
         allowedMentions: NO_PINGS,
       });
@@ -536,7 +536,7 @@ async function handleHistory(
   });
   const desc = truncate(lines.join("\n"), 4000);
   const embed = new EmbedBuilder()
-    .setTitle(`History — ${user.displayName}`)
+    .setTitle(`History - ${user.displayName}`)
     .setColor(0x9b59b6)
     .setDescription(desc);
   await interaction.reply({
