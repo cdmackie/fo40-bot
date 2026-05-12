@@ -69,6 +69,10 @@ All settings are **installation-scoped**, so each subreddit (e.g. r/FriendsOver4
 
 After installing the app, run the **"Create Discord-join post (mods only)"** menu item from the subreddit overflow menu. This creates a custom post titled "Join the FriendsOver40 Discord". Pin it to your subreddit so it's the first thing visitors see.
 
+## Bulk-syncing existing bans
+
+The **"Sync banned users to Discord (mods only)"** menu item walks the subreddit's current banned-users list and replays each as a synthetic `[fo40-bridge] ban` embed to the bridge channel, so the Discord side can catch up after a fresh install. The handler schedules a one-shot Devvit task and returns immediately - actual fan-out runs in the background, batching up to 10 bans per webhook POST and sleeping a few seconds between batches to stay well under any external rate limit. A 300-user list takes ~150s end-to-end; watch `npx devvit logs r/<sub>` for the `sync-banned task complete` line. The bot suppresses the noisy "unlinked user" mod-log notification for bulk-sync events so the bridge channel only surfaces real account hits.
+
 ## Iterating before publish
 
 To test against a sandbox without going through review (only works on subs <200 subscribers):
@@ -83,11 +87,11 @@ Hot-reloads on every save (uses `vite build --watch` per `devvit.json`'s `script
 
 - `devvit.json` - app config: permissions, settings schema, triggers, menu items, post entrypoints
 - `src/server/index.ts` - Hono entrypoint, mounts `/api/*` and `/internal/*` routes
-- `src/server/routes/triggers.ts` - `onModAction` handler (ban/unban relay)
-- `src/server/routes/menu.ts` - "Create Discord-join post" and "Sync banned users" menu actions
-- `src/server/routes/scheduler.ts` - bulk-sync-banned background task (paced + batched to dodge Reddit's outbound-fetch throttle)
+- `src/server/routes/triggers.ts` - `onModAction` handler (ban/unban relay), wrapped in retry-with-backoff for transient outbound-fetch throttling
+- `src/server/routes/menu.ts` - "Create Discord-join post" and "Sync banned users" menu actions; the latter just schedules the background task
+- `src/server/routes/scheduler.ts` - bulk-sync-banned background task (10 embeds/batch, 5s between batches)
 - `src/server/routes/api.ts` - `POST /api/join-token` called by the webview button
-- `src/server/core/` - HMAC signing, Discord webhook, Redis dedup
+- `src/server/core/` - HMAC signing, Discord webhook, retry-with-backoff, Redis dedup
 - `src/client/join.{html,ts,css}` - the join post webview rendered inside Reddit's iframe
 - `src/shared/api.ts` - types shared between client and server
 
@@ -133,6 +137,7 @@ Things that bit us during the Blocks-to-Devvit-Web migration and are worth knowi
 - **Post height needs a post-creation patch.** `submitCustomPost({ styles: { height: ... } })` currently crashes the platform with the same empty-status error (reddit/devvit#258). The entrypoint's `height: "regular"` in `devvit.json` is also not honored. Workaround in `src/server/routes/menu.ts`: call `post.setCustomPostStyles({ height: EntrypointHeight.REGULAR })` immediately after the post is created.
 - **Menu/form endpoints should return HTTP 200 even on errors**, with the error message in `showToast`. Returning non-2xx triggers Devvit's generic "Something went wrong" toast and your `showToast` is discarded.
 - **The `onModAction` trigger wire payload still uses the old shape** (`event.action`, `event.targetUser.name`, `event.moderator.name`, `event.actionedAt`, `event.subreddit.name`) even though the TypeScript `ModAction` interface uses different field names. The protobuf-JSON form is what arrives at the trigger endpoint, so the old field names are correct.
+- **Outbound `fetch()` to allowlisted domains gets aggressively throttled.** The exact limit isn't publicly documented, but bursting more than a handful of POSTs to `discord.com` in quick succession causes the gateway to start rejecting every subsequent call with `grpc invocation failed with status 2; HTTP request to discord.com is not allowed due to too many requests`. The penalty appears sticky: even single calls fail for some time after a burst, and it's app-wide (not per-install) - testing on r/bridgerdev was throttled because of an earlier burst on r/FriendsOver40. Mitigations in this codebase: bulk-sync runs as a background scheduler task with 10-embed batches and 5s pacing; the trigger-path relay retries up to 3x (2s/5s/15s) on transient gateway errors. If you're adding any new outbound-fetch flow, design for the same constraint - assume ~1 fetch every several seconds is the safe steady-state ceiling.
 
 ## License
 

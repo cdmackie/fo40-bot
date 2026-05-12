@@ -301,6 +301,8 @@ After any action, the original report embed is edited in place to show "ACTIONED
 
 When a moderator bans a user on r/FriendsOver40, the Devvit app POSTs a structured embed to a Discord webhook in a private bridge channel. This module's `MessageCreate` listener picks it up and bans the linked Discord user. Discord-side bans do NOT propagate back to Reddit. Announcement mirroring is out of scope.
 
+A mod-only "Sync banned users to Discord" menu item on the Devvit app replays the current Reddit banned-users list as synthetic ban embeds (one per user, with `moderator = "(bulk sync)"`); the bot suppresses the no-link mod-log notification for these events to keep the bridge channel clean. Work runs in a Devvit scheduler task in the background.
+
 #### B. Invite-link join flow (Reddit → Discord, with auto-verification)
 
 The Devvit app provides a custom post type "Join Discord" that mods pin to r/FriendsOver40. When a logged-in Reddit user clicks the post's button:
@@ -373,6 +375,7 @@ The bot filters by both `message.channel.id === BRIDGE_CHANNEL_ID` and `message.
 - The Discord webhook URL and the signing secret are the trust boundaries. Both must be stored only in the Devvit app's installation settings (encrypted at rest by Reddit) and the bot's `.env`.
 - If `BOT_PUBLIC_URL` becomes unreachable, the join button on Reddit fails for users; they see an error message in the post. The Devvit ban relay is unaffected because it goes directly to Discord's webhook URL.
 - The bot needs to keep its invite cache in sync. After a restart it rebuilds from `guild.invites.fetch()` on `ClientReady`. Anyone joining during the brief window before `ClientReady` may not get auto-linked; mods can use `/link-reddit` to fix.
+- Reddit's outbound-fetch gateway throttles aggressively (limit undocumented, but bursts of more than a handful of `fetch()` calls to `discord.com` per several seconds put the app into a sustained app-wide penalty box). Mitigations in `reddit_devvit/`: bulk-sync runs as a scheduler task with batched embeds and multi-second pacing; the ban-relay trigger retries with backoff. Any new outbound-fetch flow must be similarly conservative.
 
 ---
 
