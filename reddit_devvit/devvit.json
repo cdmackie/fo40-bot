@@ -1,0 +1,73 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "fo40-bridge",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "inline": true,
+        "entry": "join.html",
+        "height": "regular"
+      }
+    }
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "permissions": {
+    "http": {
+      "enable": true,
+      "domains": ["discord.com"]
+    },
+    "redis": true,
+    "reddit": {
+      "enable": true,
+      "scope": "moderator"
+    }
+  },
+  "settings": {
+    "subreddit": {
+      "discord_webhook_url": {
+        "type": "string",
+        "label": "Discord webhook URL (ban relay)",
+        "helpText": "The webhook URL of the bridge channel in your Discord server. Receives ModAction ban events. Create it in Channel Settings -> Integrations -> Webhooks."
+      },
+      "signing_secret": {
+        "type": "string",
+        "label": "Signing secret (invite-link flow)",
+        "helpText": "Shared HMAC secret for the invite-link flow. Must match BRIDGE_SIGNING_SECRET in the Discord bot's .env. Use a random string at least 32 chars long."
+      },
+      "bot_join_url": {
+        "type": "string",
+        "label": "Bot join URL (invite-link flow)",
+        "helpText": "Public URL of the Discord bot's /join endpoint, e.g. https://fo40.example.com/join . The 'Get Discord invite' button redirects users here with a signed token in the query string."
+      }
+    }
+  },
+  "triggers": {
+    "onModAction": "/internal/triggers/mod-action"
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Create Discord-join post (mods only)",
+        "description": "Creates the pinned 'Join the FriendsOver40 Discord' custom post.",
+        "forUserType": "moderator",
+        "location": "subreddit",
+        "endpoint": "/internal/menu/create-post"
+      },
+      {
+        "label": "Sync banned users to Discord (mods only)",
+        "description": "Reconciles the subreddit's banned-users list to the Discord side via the bridge channel.",
+        "forUserType": "moderator",
+        "location": "subreddit",
+        "endpoint": "/internal/menu/sync-banned"
+      }
+    ]
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build"
+  }
+}

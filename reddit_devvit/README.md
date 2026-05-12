@@ -1,6 +1,6 @@
-# fo40-bridge - Devvit app
+# fo40-bridge - Devvit Web app
 
-Companion Devvit app for the [FriendsOver40 Discord bot](../README.md). Two integrations:
+Companion [Devvit Web](https://developers.reddit.com/docs/capabilities/devvit-web/devvit_web_overview) app for the [FriendsOver40 Discord bot](../README.md). Built on the modern Devvit Web stack (`devvit.json` + Node/Hono server + HTML/TS webview); the legacy Blocks-based `Devvit.addCustomPostType` is deprecated by Reddit and rejected at App Review as of March 2026. Two integrations:
 
 1. **Modlog ban relay.** When a mod bans a user on r/FriendsOver40, the app posts a structured embed to a Discord webhook. The bot reads it and bans the linked Discord user.
 2. **Invite-link join flow.** A pinned custom post on r/FriendsOver40 has a "Get Discord invite" button. When a Reddit user clicks it, the app signs an HMAC token containing their Reddit username and redirects them to the bot's web server, which creates a one-time-use Discord invite and sends the user to discord.gg. On member join, the bot auto-links the Discord account to the Reddit username and assigns the `40+` role.
@@ -19,29 +19,33 @@ For a Reddit user joining the Discord:
 
 **No slash commands. No codes. No forms.** Two clicks total.
 
-## HTTP fetch domains
+## Network traffic
 
-This app only POSTs to `discord.com`, which is on Devvit's global fetch allowlist. JSON-encoded ban event embeds go to a Discord webhook URL stored in the install setting `discord_webhook_url`.
+External outbound traffic from the Devvit sandbox only goes to `discord.com` (declared in `devvit.json` under `permissions.http.domains`). JSON-encoded ban event embeds are POSTed to a Discord webhook URL stored in the install setting `discord_webhook_url`.
 
-The invite-link button does NOT use HTTP fetch - it navigates the user's browser to the Discord bot's public URL via `context.ui.navigateTo()`, which doesn't count as a fetch. (The token is signed in-app with HMAC-SHA256.)
+The invite-link flow has two hops:
+1. The webview (running inside Reddit's iframe) fetches `/api/join-token` from this app's own Devvit server - same-origin, not subject to the external fetch allowlist.
+2. The Devvit server reads the current Reddit user via `reddit.getCurrentUsername()`, HMAC-signs a token, and returns a `bot_join_url?token=...` URL. The webview then calls `navigateTo()` (from `@devvit/web/client`) to send the user's browser there - browser navigation isn't a server-side fetch, so the bot's domain doesn't need allowlisting.
 
-Data sent:
+Data sent off-platform:
 - Ban events: banned redditor's username, modlog moderator, ban reason - all already mod-visible on Reddit.
-- Invite-link tokens (in URL query string): the user's Reddit username and an expiry timestamp, HMAC-signed with the shared secret.
+- Invite-link tokens (in the URL the user navigates to): the user's Reddit username and an expiry timestamp, HMAC-signed with the shared secret.
 
 No PII beyond what's already on Reddit is transmitted.
 
 ## Setup
 
 Prerequisites:
-- Node.js 20+
+- Node.js 22+ (Devvit Web requires `>=22.2.0`)
 - A Reddit account that moderates r/FriendsOver40
 - The Discord bot is running with a public URL, a bridge channel + webhook, and a 32+ char `BRIDGE_SIGNING_SECRET` in its `.env` (see the main repo README)
 
 ```bash
 # In this directory:
 npm install
+npm run build             # vite build -> dist/{client,server}
 npx devvit login
+npx devvit upload         # uploads the build to your developer account
 npx devvit publish        # submits to App Review (unlisted)
 ```
 
@@ -73,7 +77,18 @@ To test against a sandbox without going through review (only works on subs <200 
 npx devvit playtest <your-test-subreddit>
 ```
 
-Hot-reloads on every save. Test the flow by clicking the join button and watching for the redirect chain to land you in your test Discord server.
+Hot-reloads on every save (uses `vite build --watch` per `devvit.json`'s `scripts.dev`). Test the flow by clicking the join button and watching for the redirect chain to land you in your test Discord server.
+
+## Project layout
+
+- `devvit.json` - app config: permissions, settings schema, triggers, menu items, post entrypoints
+- `src/server/index.ts` - Hono entrypoint, mounts `/api/*` and `/internal/*` routes
+- `src/server/routes/triggers.ts` - `onModAction` handler (ban/unban relay)
+- `src/server/routes/menu.ts` - "Create Discord-join post" and "Sync banned users" menu actions
+- `src/server/routes/api.ts` - `POST /api/join-token` called by the webview button
+- `src/server/core/` - HMAC signing, Discord webhook, Redis dedup
+- `src/client/join.{html,ts,css}` - the join post webview rendered inside Reddit's iframe
+- `src/shared/api.ts` - types shared between client and server
 
 ## Embed protocol (ban relay)
 
@@ -100,7 +115,7 @@ Payload JSON:
 { "u": "<reddit_username>", "e": <unix_epoch_seconds_when_token_expires> }
 ```
 
-The bot's `web/server.py` validates both the signature and the expiry before issuing an invite.
+The bot's `src/web/server.ts` validates both the signature and the expiry before issuing an invite.
 
 ## Known limitations
 
@@ -108,6 +123,15 @@ The bot's `web/server.py` validates both the signature and the expiry before iss
 - **Signing secret leak** = anyone can forge invite-link URLs and claim any Reddit username for any Discord account. Treat it as a credential.
 - **Devvit app uninstall is silent** to the bot. If join-button clicks stop working, check the app at `https://developers.reddit.com/apps/fo40-bridge`.
 - **Custom post button on mobile** has been mostly tested via playtest. Behavior on the official Reddit mobile app is generally OK; if a user reports the button doesn't work, fall back to `/link-reddit` mod-driven manual link.
+
+## Devvit Web gotchas
+
+Things that bit us during the Blocks-to-Devvit-Web migration and are worth knowing if you're touching this:
+
+- **`permissions.reddit` must be declared explicitly** when a `permissions` block is present. If you set `permissions: { http, redis }` and leave out `reddit`, the schema's boolean default of `false` kicks in and every `reddit.*` gRPC call silently fails with `Error: undefined undefined: undefined` (empty status). Either declare `reddit: true` / `reddit: { enable: true, ... }`, or omit the `permissions` block entirely.
+- **Post height needs a post-creation patch.** `submitCustomPost({ styles: { height: ... } })` currently crashes the platform with the same empty-status error (reddit/devvit#258). The entrypoint's `height: "regular"` in `devvit.json` is also not honored. Workaround in `src/server/routes/menu.ts`: call `post.setCustomPostStyles({ height: EntrypointHeight.REGULAR })` immediately after the post is created.
+- **Menu/form endpoints should return HTTP 200 even on errors**, with the error message in `showToast`. Returning non-2xx triggers Devvit's generic "Something went wrong" toast and your `showToast` is discarded.
+- **The `onModAction` trigger wire payload still uses the old shape** (`event.action`, `event.targetUser.name`, `event.moderator.name`, `event.actionedAt`, `event.subreddit.name`) even though the TypeScript `ModAction` interface uses different field names. The protobuf-JSON form is what arrives at the trigger endpoint, so the old field names are correct.
 
 ## License
 

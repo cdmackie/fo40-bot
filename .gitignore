@@ -21,6 +21,9 @@ data/*.db-shm
 # Devvit
 .devvit/
 
+# Engram project memory (machine-local)
+.engram/
+
 # Editor / OS
 .DS_Store
 .idea/

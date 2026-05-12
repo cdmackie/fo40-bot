@@ -77,41 +77,45 @@ fo40-bot/
 ├── .env.example           # Template; copy to .env and fill in
 ├── data/
 │   └── bot.db             # SQLite, persistent (gitignored)
-└── reddit_devvit/         # Companion Devvit app (TypeScript). Uploaded to Reddit;
-    ├── devvit.yaml        # not run by this Node project. See its README.
+└── reddit_devvit/         # Companion Devvit Web app (TypeScript). Uploaded to Reddit;
+    ├── devvit.json        # not run by this Node project. See its README.
     ├── package.json
     ├── tsconfig.json
-    └── src/main.tsx
+    ├── vite.config.ts
+    └── src/{client,server,shared}/
 ```
 
 ---
 
 ## 5. What is implemented
 
-### 5.1 Foundation (`core/`)
+### 5.1 Foundation (`src/core/`)
 
-**`core/db.py`** - defines the full schema for *all* features (current and planned) as idempotent `CREATE TABLE IF NOT EXISTS` statements run on startup via `init_db()`. Tables for unbuilt cogs already exist; new cogs should use them rather than redefining schema. Exposes `connect()` returning an `aiosqlite` context manager.
+**`src/core/db.ts`** - defines the full schema for *all* features (current and planned) as idempotent `CREATE TABLE IF NOT EXISTS` statements in the `SCHEMA` array, run on first call to `getDb()`. Tables for unbuilt modules already exist; new modules should use them rather than redefining schema. `getDb()` returns a memoised `better-sqlite3` `Database` handle (synchronous). `closeDb()` is called from `bot.ts` during shutdown.
 
-**`core/config.py`** - `Settings` dataclass loaded from `.env` + `config.yaml`. Cached after first call. Access via `config.load()`. The `yaml_data` field on the dataclass holds the parsed YAML for cogs to read their own config sections from.
+**`src/core/config.ts`** - `loadSettings()` reads `.env` + `config.yaml` and returns a `Settings` object. Cached after first call. The `yaml` field holds the parsed YAML for modules to read their own config sections from. ID fields in YAML are normalised to strings (Discord snowflakes exceed JS Number precision).
 
-**`core/scheduling.py`** - singleton `AsyncIOScheduler` accessed via `get_scheduler()`. Helper `cron_trigger(expr, tz)` builds a `CronTrigger` from a 5-field cron expression and IANA timezone name. The scheduler is started in `bot.py`'s `setup_hook`; cogs add jobs to it during their `cog_load`.
+**`src/core/scheduling.ts`** - thin wrapper around `croner`. Modules register jobs with `addJob(id, expr, tz, handler)`; the unique `id` lets a hot-reload replace the existing job rather than duplicate it. `shiftCron(expr, minutesDelta)` derives a "N minutes before/after" cron from a 5-field expression, handling minute/hour shifts that cross midnight back/forward by one day for numeric `dow` values, leaving `*` alone, and returning `null` for complex expressions. `shutdownScheduler()` stops all registered jobs.
 
-**`core/permissions.py`** - exposes `is_moderator(member)`, `is_admin(member)`, `is_forty_plus(member)`, and the slash-command decorators `@mod_only()` and `@forty_plus_only()`. `is_moderator()` returns true for the `mods` **or** `admins` role; admins inherit mod privileges. The decorators raise `NotModerator` / `NotFortyPlus` (subclasses of `app_commands.CheckFailure`) on rejection; the global `tree.on_error` in `bot.py` catches these and sends an ephemeral message. New cogs **must** use these helpers rather than re-implementing role checks. Use `is_admin()` directly only for the rare command that admins-and-not-mods should run.
+**`src/core/permissions.ts`** - exposes `isModerator(member)`, `isAdmin(member)`, `isFortyPlus(member)`, and the interaction guards `requireModerator(interaction)` / `requireFortyPlus(interaction)`. `isModerator()` returns true for the `mods` **or** `admins` role; admins inherit mod privileges. The `require*` helpers reply ephemerally with a "not authorised" message and return `false` if the check fails; the calling command then returns early. New modules **must** use these helpers rather than re-implementing role checks. Use `isAdmin()` directly only for the rare command that admins-and-not-mods should run.
 
-### 5.2 Entry point (`bot.py`)
+**`src/core/types.ts`** - defines `BotModule { name, commands?, init? }` and `ModuleCommand { data, execute }`. Every feature exports a default `BotModule`; `bot.ts` collects them into the `MODULES` array.
 
-- Subclasses `commands.Bot` as `FO40Bot`.
-- Enables `intents.members`. `intents.message_content` is **off**; turn it on only if a future cog truly requires reading message text (most don't - slash commands work without it).
-- `INITIAL_COGS` list controls which cogs load. **Add new cogs here** when implementing them.
-- Slash commands sync to the guild on startup (`tree.sync(guild=...)`) for instant availability.
+### 5.2 Entry point (`src/bot.ts`)
 
-### 5.3 Scheduler cog (`cogs/scheduler.py`)
+- Constructs a `discord.js` `Client` with intents `Guilds`, `GuildMembers`, `GuildMessages`. `MessageContent` is **off**; turn it on only if a future module truly requires reading message text (most don't - slash commands work without it).
+- The `MODULES` array controls which modules load. **Add new modules here** when implementing them.
+- On startup: registers all module commands with the guild via `REST().put(Routes.applicationGuildCommands(...))` for instant availability, then calls each module's `init(client)` hook to attach event listeners.
+- Dispatches `interactionCreate` events to the right module command handler via a name → handler map. Catches errors and replies ephemerally rather than crashing.
+- Handles `SIGINT` / `SIGTERM` by closing the gateway, the DB, and the scheduler before exit.
 
-Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/close/warn jobs with the shared scheduler. For each entry:
+### 5.3 Scheduler module (`src/modules/scheduler.ts`)
 
-- **Open** - grants the gate role (default `@everyone`, configurable per channel via `gate_role_id`) view + send + read history on the channel; optionally posts an announcement to a different channel via `announce.open_message`.
-- **Close** - revokes the gate role's view + send (channel becomes hidden from members holding only that role); optionally purges all non-pinned messages via `channel.purge()`.
-- **Warn** - derives a "N minutes before close" cron via `_shift_cron()` and fires up to two messages: `announce.close_warning_message` posts inside the scheduled channel (warning the people present), and `announce.close_message` posts to the announce channel (broadcasting that close is imminent). Either or both may be set; the job is only registered if at least one is. The shift function handles minute/hour shifts that cross midnight back/forward by one day for numeric `dow` values, leaves `*` alone, and returns `None` for complex expressions.
+Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/close/warn jobs via `addJob()`. For each entry:
+
+- **Open** - grants the gate role (default `@everyone`, configurable per channel via `gate_role_id`) View Channel + Send Messages + Read Message History on the channel; optionally posts an announcement to a different channel via `announce.open_message`.
+- **Close** - revokes the gate role's View Channel + Send Messages (channel becomes hidden from members holding only that role); optionally purges all non-pinned messages via `channel.bulkDelete()` in batches.
+- **Warn** - derives a "N minutes before close" cron via `shiftCron()` and fires up to two messages: `announce.close_warning_message` posts inside the scheduled channel (warning the people present), and `announce.close_message` posts to the announce channel (broadcasting that close is imminent). Either or both may be set; the job is only registered if at least one is.
 
 **Per-entry config keys:**
 | Key | Required | Purpose |
@@ -129,9 +133,9 @@ Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/cl
 | `announce.close_warning_message` | no | Posted in the scheduled channel at warn time |
 | `announce.close_message` | no | Posted to the announce channel at warn time |
 
-**Class structure:**
-- `ScheduledChannel` - encapsulates open/warn/close behaviour for one configured channel.
-- `SchedulerCog` - discord.py Cog; on `cog_load`, instantiates a `ScheduledChannel` per YAML entry and registers jobs.
+**Code structure:**
+- `ScheduledChannel` class encapsulates open/warn/close behaviour for one configured channel.
+- Module's `init()` hook instantiates a `ScheduledChannel` per YAML entry and registers their jobs.
 
 **Hardcoded behaviours:**
 - Hide-then-purge ordering on close (so users don't watch deletion happen).
@@ -140,7 +144,7 @@ Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/cl
 
 ### 5.4 Deployment
 
-- `Dockerfile` builds a slim Python 3.12 image with `tzdata` installed.
+- `Dockerfile` builds a slim `node:20-alpine` image with `tzdata` installed and runs `node dist/index.js`.
 - `docker-compose.yml` mounts `./data` for the SQLite DB and `./config.yaml` read-only into the container; rotates JSON logs at 10MB × 3 files.
 - Run with `docker compose up -d --build`.
 
@@ -148,7 +152,7 @@ Implemented. Reads `scheduled_channels` from `config.yaml` and registers open/cl
 
 ## 6. Data model (full)
 
-All tables are defined in `core/db.py`. Tables for unbuilt cogs are already created so new cogs can use them immediately.
+All tables are defined in `src/core/db.ts`. Tables for unbuilt modules are already created so new modules can use them immediately.
 
 | Table | Status | Purpose |
 | --- | --- | --- |
@@ -162,7 +166,7 @@ All tables are defined in `core/db.py`. Tables for unbuilt cogs are already crea
 | `prompts` | schema ready | Pool of daily-prompt strings with `last_used` for rotation |
 | `ban_sync_log` | implemented | Audit trail for Reddit → Discord ban mirroring |
 
-When implementing a cog, **read from and write to these existing tables** rather than introducing new schema. If a new column is genuinely needed, add it to the `SCHEMA` list in `core/db.py` as an idempotent `ALTER` and bump `schema_version`.
+When implementing a module, **read from and write to these existing tables** rather than introducing new schema. If a new column is genuinely needed, add it to the `SCHEMA` array in `src/core/db.ts` as an idempotent `ALTER` and bump `schema_version`.
 
 ---
 
@@ -170,27 +174,27 @@ When implementing a cog, **read from and write to these existing tables** rather
 
 These match the patterns established in the implemented code. Follow them.
 
-- **Logging.** Each module declares `log = logging.getLogger("fo40.<area>")` (e.g. `"fo40.scheduler"`). Use structured messages: `log.info("[%s] opened", self.name)`. Don't print.
-- **Error handling.** Don't swallow exceptions silently. If a guild/channel/role isn't found, `log.warning(...)` and return; don't crash the cog.
-- **Permission gating.** Use `@mod_only()` and `@forty_plus_only()` from `core.permissions`. Don't re-implement role checks inline.
-- **DB access.** Use `async with db.connect() as conn:` and `await conn.commit()`. Don't open raw `aiosqlite` connections.
-- **Scheduling.** Get the shared scheduler via `get_scheduler()`. Use `replace_existing=True` when adding jobs so reloads don't duplicate.
-- **Config.** Read your cog's section from `config.load().yaml_data` (e.g. `yaml_cfg.get("daily_prompt", {})`). IDs and secrets that are sensitive belong in `.env` (extend `Settings`); runtime-tweakable values belong in `config.yaml`.
-- **Slash commands.** Define as `@app_commands.command(...)` methods on the cog. Use `interaction.response.send_message(..., ephemeral=True)` for mod-only responses by default to keep mod chatter private.
-- **Cog loading.** Each cog file ends with `async def setup(bot): await bot.add_cog(...)`. Add the new cog's import path to `INITIAL_COGS` in `bot.py`.
-- **No new dependencies without justification.** Current deps: `discord.py`, `apscheduler`, `aiosqlite`, `PyYAML`, `python-dotenv`. `praw` will be added for `reddit_sync`. Anything else needs a real reason.
+- **Logging.** Plain `console.log` / `console.warn` / `console.error` with a module-prefixed tag, e.g. `console.info("[scheduler] opened %s", name)`. Container logs are captured by Docker as JSON; no logging library is used.
+- **Error handling.** Don't swallow exceptions silently. If a guild/channel/role isn't found, `console.warn(...)` and return; don't crash the module. Wrap interaction handlers in try/catch and call `interaction.reply` / `editReply` with an error message rather than letting the exception bubble.
+- **Permission gating.** Use `requireModerator(interaction)` / `requireFortyPlus(interaction)` from `src/core/permissions.ts` at the top of every guarded command - they reply and return `false` on failure so the command short-circuits. Don't re-implement role checks inline.
+- **DB access.** Call `getDb()` from `src/core/db.ts` to get the shared `better-sqlite3` handle. Use parameterised statements (`db.prepare("... WHERE id = ?").get(id)`); never string-interpolate IDs or user-supplied text. Discord snowflakes are stored as `TEXT`, not `INTEGER`.
+- **Scheduling.** Use `addJob(id, expr, tz, handler)` from `src/core/scheduling.ts`. Each job has a unique `id` so a hot-reload replaces the existing job rather than duplicating it.
+- **Config.** Read your module's section from `loadSettings().yaml` (e.g. `settings.yaml.daily_prompt`). Sensitive secrets/IDs belong in `.env` (extend the `Settings` interface in `src/core/config.ts`); runtime-tweakable values belong in `config.yaml`.
+- **Slash commands.** Build with `SlashCommandBuilder` from `discord.js`. Mod-only commands should call `setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)` so they're hidden from non-mods in Discord's autocomplete (the app-layer `requireModerator()` check is the actual security boundary). Use `interaction.reply({ ..., flags: MessageFlags.Ephemeral })` for mod-only responses to keep mod chatter private. For commands doing multiple async operations, `deferReply` first then `editReply`.
+- **Module loading.** Each file exports a default `BotModule` (`name`, optional `commands`, optional `init`). Add its import + the module instance to the `MODULES` array in `src/bot.ts`.
+- **No new dependencies without justification.** Current deps: `discord.js`, `better-sqlite3`, `croner`, `fastify`, `dotenv`, `yaml`. Anything else needs a real reason.
 
 ---
 
-## 8. Roadmap - cogs to build
+## 8. Roadmap - modules to build
 
-Listed in recommended build order. Each entry specifies the purpose, slash command surface, DB tables, and implementation notes. Build one cog at a time, test, then move to the next.
+Listed in recommended build order. Each entry specifies the purpose, slash command surface, DB tables, and implementation notes. Build one module at a time, test, then move to the next.
 
-### 8.1 `cogs/mod_notes.py` - Mod notes & strikes (IMPLEMENTED)
+### 8.1 `src/modules/modNotes.ts` - Mod notes & strikes (IMPLEMENTED)
 
 **Purpose:** Persistent, private record of moderator observations and disciplinary actions on users. Foundation for `dm_reports` and any future moderation feature.
 
-**Slash commands** (all `@mod_only()`, all responses ephemeral):
+**Slash commands** (all `requireModerator()`, all responses ephemeral):
 - `/note add user:<user> note:<text>` - Adds a row to `mod_notes`.
 - `/note view user:<user>` - Replies with all notes on the user, newest first.
 - `/note remove note_id:<int>` - Deletes a specific note.
@@ -202,16 +206,16 @@ Listed in recommended build order. Each entry specifies the purpose, slash comma
 | Severity | Discord action | `expires_at` |
 | --- | --- | --- |
 | 1 (warn) | none | now + 90 days |
-| 2 (timeout) | `member.timeout(duration_days)` | now + duration_days |
-| 3 (ban) | `guild.ban(user)` (immediate) | NULL (permanent) |
+| 2 (timeout) | `member.timeout(durationMs)` | now + duration_days |
+| 3 (ban) | `guild.bans.create(userId)` (immediate) | NULL (permanent) |
 
 **DB tables:** `users`, `mod_notes`, `strikes`.
 
 **Notes:**
 - All actions post a structured embed to `MOD_LOG_CHANNEL_ID` (color-coded per severity) with the acting mod, target user, and details.
-- `users` rows are auto-created on first action via `INSERT OR IGNORE`. `joined_at` is left NULL until/unless an `on_member_join` listener populates it.
-- User parameters use `discord.User` (not `Member`) so commands work for users who have left or been banned.
-- Module-level helpers (`add_note`, `add_strike`, `get_history`, `log_action`, etc.) are exported so `dm_reports` can record actions through this cog rather than re-implementing the DB layer.
+- `users` rows are auto-created on first action via `INSERT OR IGNORE`. `joined_at` is left NULL until/unless a `GuildMemberAdd` listener populates it.
+- User parameters use `User` (not `GuildMember`) so commands work for users who have left or been banned.
+- Module-level helpers (`addNote`, `addStrike`, `getHistory`, `logAction`, `ensureUser`, etc.) are exported so `dmReports` can record actions through this module rather than re-implementing the DB layer.
 
 ### 8.2 `src/modules/dmReports.ts` - DM creeper reports (IMPLEMENTED)
 
@@ -238,48 +242,48 @@ After any action, the original report embed is edited in place to show "ACTIONED
 
 **Cross-module integration:** dmReports imports `modNotes` helpers directly. This is the canonical example of why `modNotes` exposes its DB helpers as exported functions rather than just slash commands.
 
-### 8.3 `cogs/reaction_roles.py` - Self-assignable roles
+### 8.3 `src/modules/reactionRoles.ts` - Self-assignable roles
 
 **Purpose:** Members assign themselves roles (timezone, interests, life stage, pronouns) by reacting to bot-posted messages.
 
-**Slash commands** (all `@mod_only()`):
+**Slash commands** (all `requireModerator()`):
 - `/rr-create channel:<channel> title:<text> description:<text>` - Posts an embed. Returns the message ID.
-- `/rr-add-role message_id:<int> emoji:<str> role:<role>` - Adds an emoji→role mapping to that message. Updates `reaction_role_messages.config_json`. Bot adds the reaction to the message.
-- `/rr-remove-role message_id:<int> emoji:<str>` - Reverse.
+- `/rr-add-role message_id:<str> emoji:<str> role:<role>` - Adds an emoji→role mapping to that message. Updates `reaction_role_messages.config_json`. Bot adds the reaction to the message.
+- `/rr-remove-role message_id:<str> emoji:<str>` - Reverse.
 
 **Listeners:**
-- `on_raw_reaction_add` - if `payload.message_id` is in `reaction_role_messages` and the emoji maps to a role, add the role to the user.
-- `on_raw_reaction_remove` - reverse.
+- `Events.MessageReactionAdd` - if `reaction.message.id` is in `reaction_role_messages` and the emoji maps to a role, add the role to the user. Use `client.on(Events.MessageReactionAdd, ...)` and call `reaction.fetch()` first if `reaction.partial` is true so it fires for messages not in cache.
+- `Events.MessageReactionRemove` - reverse.
 
 **DB tables:** `reaction_role_messages` (config stored as JSON in `config_json`).
 
 **Notes:**
-- Use raw events (not `on_reaction_add`) so they fire for messages not in cache.
-- Ignore reactions from the bot itself.
+- Ignore reactions from the bot itself (`user.id === client.user.id`).
+- Requires the `GuildMessageReactions` intent.
 
-### 8.4 `cogs/prompts.py` - Daily conversation prompts
+### 8.4 `src/modules/prompts.ts` - Daily conversation prompts
 
 **Purpose:** Posts a rotating conversation prompt to a designated channel each day.
 
-**Slash commands** (all `@mod_only()`):
+**Slash commands** (all `requireModerator()`):
 - `/prompt add text:<str> [category:<str>]`
 - `/prompt remove id:<int>`
 - `/prompt list [category:<str>]`
 - `/prompt post-now` - fires the daily post immediately.
 
-**Schedule:** APScheduler cron from `config.yaml` (`features.daily_prompt.cron`, `features.daily_prompt.timezone`). On fire, picks the prompt with the oldest `last_used` (NULL counts as oldest), posts it, updates `last_used`.
+**Schedule:** `addJob()` cron from `config.yaml` (`features.daily_prompt.cron`, `features.daily_prompt.timezone`). On fire, picks the prompt with the oldest `last_used` (NULL counts as oldest), posts it, updates `last_used`.
 
 **DB tables:** `prompts`.
 
 **Notes:**
-- Initial prompt seeding can be done via `/prompt add` post-deploy, or by extending `db.init_db()` to insert a starter set if the table is empty.
+- Initial prompt seeding can be done via `/prompt add` post-deploy, or by adding seed `INSERT OR IGNORE` rows to the `SCHEMA` array in `src/core/db.ts`.
 
-### 8.5 `cogs/birthdays.py` - Birthday tracking
+### 8.5 `src/modules/birthdays.ts` - Birthday tracking
 
 **Purpose:** Members opt in to birthday tracking; bot announces birthdays daily.
 
 **Slash commands:**
-- `/birthday set month:<1-12> day:<1-31>` - `@forty_plus_only()`. Validates the date (handle Feb 29 → store as Feb 28 with a note, or reject and require Feb 28). Upserts into `birthdays`.
+- `/birthday set month:<1-12> day:<1-31>` - `requireFortyPlus()`. Validates the date (handle Feb 29 → store as Feb 28 with a note, or reject and require Feb 28). Upserts into `birthdays`.
 - `/birthday remove` - Deletes the user's row.
 - `/birthday today` - Lists members whose birthday is today (mod or anyone - your call; default to anyone).
 
@@ -289,29 +293,29 @@ After any action, the original report embed is edited in place to show "ACTIONED
 
 **Privacy:** Year is **never** stored. The schema enforces this.
 
-### 8.6 `cogs/reddit_sync.py` - Reddit ↔ Discord integration (IMPLEMENTED)
+### 8.6 `src/modules/redditSync.ts` - Reddit ↔ Discord integration (IMPLEMENTED)
 
 **Two integrations, sharing a Devvit companion app:**
 
 #### A. Modlog ban relay (Reddit → Discord)
 
-When a moderator bans a user on r/FriendsOver40, the Devvit app POSTs a structured embed to a Discord webhook in a private bridge channel. This cog's `on_message` listener picks it up and bans the linked Discord user. Discord-side bans do NOT propagate back to Reddit. Announcement mirroring is out of scope.
+When a moderator bans a user on r/FriendsOver40, the Devvit app POSTs a structured embed to a Discord webhook in a private bridge channel. This module's `MessageCreate` listener picks it up and bans the linked Discord user. Discord-side bans do NOT propagate back to Reddit. Announcement mirroring is out of scope.
 
 #### B. Invite-link join flow (Reddit → Discord, with auto-verification)
 
 The Devvit app provides a custom post type "Join Discord" that mods pin to r/FriendsOver40. When a logged-in Reddit user clicks the post's button:
 
-1. The Devvit app reads their Reddit username and signs an HMAC-SHA256 token containing `{u: username, e: expiry}` using `signing_secret` (shared with the bot).
-2. Devvit `navigateTo`s `bot_join_url?token=...`, which is the bot's web server.
-3. The bot (`web/server.py`) verifies the signature and expiry.
-4. The bot creates a one-time-use Discord invite for `INVITE_CHANNEL_ID` (max_uses=1, max_age=10min) and stores `{invite_code: reddit_username}` in `pending_invites`.
+1. The webview button POSTs `/api/join-token` on the Devvit app's own server, which reads the current Reddit user via `reddit.getCurrentUsername()` and signs an HMAC-SHA256 token containing `{u: username, e: expiry}` using `signing_secret` (shared with the bot).
+2. The webview calls `navigateTo()` (from `@devvit/web/client`) to send the browser to `bot_join_url?token=...`.
+3. The bot (`src/web/server.ts`, fastify) verifies the signature and expiry.
+4. The bot creates a one-time-use Discord invite for `INVITE_CHANNEL_ID` (`maxUses: 1`, `maxAge: 600`) and stores `{invite_code: reddit_username}` in `pending_invites`.
 5. The bot redirects the browser to `https://discord.gg/<invite_code>`.
 6. The user joins Discord normally.
-7. The cog's `on_member_join` listener compares pre/post invite-use counts to identify which invite was used, looks up `pending_invites`, saves `users.reddit_username`, and assigns the `40+` role. The pending row is then deleted.
+7. The module's `Events.GuildMemberAdd` listener compares pre/post invite-use counts to identify which invite was used, looks up `pending_invites`, saves `users.reddit_username`, and assigns the `40+` role. The pending row is then deleted.
 
 User-facing experience: **two clicks** (the Reddit post button + Discord's "Accept invite" prompt). No slash commands, no codes, no forms. Reddit identity is auto-verified via Devvit's auth context.
 
-**Architecture rationale:** Reddit closed the script-app API path in late 2025 in favour of Devvit. Direct PRAW/asyncpraw access is no longer available. Devvit apps run sandboxed on Reddit but can POST to allowlisted external domains (`discord.com` is on the global allowlist; the bot's web server's domain doesn't need allowlisting because the Devvit app navigates the user's browser there rather than fetching server-to-server).
+**Architecture rationale:** Reddit closed the script-app API path in late 2025 in favour of Devvit. Direct PRAW / Reddit API access is no longer available, so the bot has no Reddit credentials. Devvit Web apps run sandboxed on Reddit but can POST to allowlisted external domains (`discord.com` is declared in `devvit.json`'s `permissions.http.domains`; the bot's web server's domain doesn't need allowlisting because the Devvit app navigates the user's browser there rather than fetching server-to-server).
 
 All Devvit settings (`discord_webhook_url`, `signing_secret`, `bot_join_url`) are **installation-scoped** so multiple subreddits can install the same app and point it at their own Discord servers/bots independently.
 
@@ -329,11 +333,11 @@ All Devvit settings (`discord_webhook_url`, `signing_secret`, `bot_join_url`) ar
 - `WEB_SERVER_PORT` - local listen port (default 8080)
 - `INVITE_CHANNEL_ID` - channel new members are invited into
 
-The bot's web server self-disables if any of `BRIDGE_SIGNING_SECRET`, `INVITE_CHANNEL_ID`, or `BOT_PUBLIC_URL` is missing. The on_message bridge listener self-disables if either `BRIDGE_CHANNEL_ID` or `BRIDGE_WEBHOOK_ID` is missing.
+The bot's web server self-disables if any of `BRIDGE_SIGNING_SECRET`, `INVITE_CHANNEL_ID`, or `BOT_PUBLIC_URL` is missing. The `MessageCreate` bridge listener self-disables if either `BRIDGE_CHANNEL_ID` or `BRIDGE_WEBHOOK_ID` is missing.
 
 **Discord permissions the bot needs:**
 - `Create Instant Invite` on the invite channel (to create one-time invites)
-- `Manage Server` or `View Audit Log` on the guild (to list invites for the use-count comparison in `on_member_join`)
+- `Manage Server` or `View Audit Log` on the guild (to list invites for the use-count comparison in `GuildMemberAdd`)
 - `Manage Roles` (to assign the 40+ role)
 - `Ban Members` (for ban relay)
 
@@ -342,41 +346,33 @@ The bot itself has **no Reddit credentials** and makes **no Reddit API calls**.
 ```
 [Reddit modlog ban]
         ↓
-[Devvit app's ModAction trigger fires]
+[Devvit app's onModAction trigger endpoint fires]
         ↓
-[Devvit POSTs embed to Discord webhook URL]
+[Devvit server POSTs embed to Discord webhook URL]
         ↓
 [Webhook lands message in #reddit-bridge channel]
         ↓
-[Bot's on_message picks it up, applies Discord ban]
+[Bot's MessageCreate listener picks it up, applies Discord ban]
 ```
 
-For verification, the flow inverts: the user clicks "Link Discord account" in the subreddit menu (added by the Devvit app), pastes a code that the bot generated via `/link-reddit`, and Devvit posts the `{reddit_username, code}` pair to the same webhook. The bot matches the code to a pending verification and writes the link.
-
-**Dependencies:** `praw>=7.7` (add to `requirements.txt`). New env vars in `.env`:
-- `REDDIT_CLIENT_ID`
-- `REDDIT_CLIENT_SECRET`
-- `REDDIT_USERNAME`
-- `REDDIT_PASSWORD`
-- `REDDIT_USER_AGENT` (e.g. `"fo40-bot/0.1 by u/<operator>"`)
-
-**Webhook embed protocol** (set by the Devvit app, read by the bot's `on_message` listener in the bridge channel):
+**Webhook embed protocol** (set by the Devvit app, read by the bot's `MessageCreate` listener in the bridge channel):
 
 | `embed.title` | Fields | Action |
 | --- | --- | --- |
 | `[fo40-bridge] ban` | `reddit_username`, `moderator`, `reason` | Look up linked Discord user; ban with reason; log to `ban_sync_log` and `MOD_LOG_CHANNEL_ID`. If unmatched, log and post a heads-up. |
+| `[fo40-bridge] unban` | `reddit_username`, `moderator` | Look up linked Discord user; unban; log. |
 
-The bot filters by both `message.channel.id == BRIDGE_CHANNEL_ID` and `message.webhook_id == BRIDGE_WEBHOOK_ID`.
+The bot filters by both `message.channel.id === BRIDGE_CHANNEL_ID` and `message.webhookId === BRIDGE_WEBHOOK_ID`.
 
 **Out of scope:**
 - Discord-ban → Reddit-ban (outbound sync). Blast radius too high; mods can ban on Reddit manually if needed.
 - Announcement-flair post mirroring. Operator does not use this workflow.
 
 **Caveats / risks:**
-- Identity verification depends on the Devvit app correctly reading `context.reddit.getCurrentUser()` for the Reddit username. The signing secret prevents URL forgery, but if Reddit's auth is compromised the chain breaks at that point.
+- Identity verification depends on the Devvit app correctly reading `reddit.getCurrentUsername()` for the Reddit username. The signing secret prevents URL forgery, but if Reddit's auth is compromised the chain breaks at that point.
 - The Discord webhook URL and the signing secret are the trust boundaries. Both must be stored only in the Devvit app's installation settings (encrypted at rest by Reddit) and the bot's `.env`.
-- If `BOT_PUBLIC_URL` becomes unreachable, the join button on Reddit fails for users; they see a Devvit toast. The Devvit ban relay is unaffected because it goes directly to Discord's webhook URL.
-- The bot needs to keep its invite cache in sync. After a restart it rebuilds from `Guild.invites()` on `on_ready`. Anyone joining during the brief window before `on_ready` may not get auto-linked; mods can use `/link-reddit` to fix.
+- If `BOT_PUBLIC_URL` becomes unreachable, the join button on Reddit fails for users; they see an error message in the post. The Devvit ban relay is unaffected because it goes directly to Discord's webhook URL.
+- The bot needs to keep its invite cache in sync. After a restart it rebuilds from `guild.invites.fetch()` on `ClientReady`. Anyone joining during the brief window before `ClientReady` may not get auto-linked; mods can use `/link-reddit` to fix.
 
 ---
 
@@ -395,12 +391,12 @@ Do not build these. They have been considered and rejected:
 
 ## 10. Discord server setup requirements
 
-These are operator responsibilities, but new cogs may depend on them. Verify before building cogs that interact with channels or roles.
+These are operator responsibilities, but new modules may depend on them. Verify before building modules that interact with channels or roles.
 
 1. **Bot role placement.** The `friends-bot` role exists, positioned above `@everyone` and below `mods`/`admins`. Do not grant Administrator.
 2. **Per-channel permissions for the bot.** On every channel the bot manages (e.g. `#selfie-sunday`), the `friends-bot` role is explicitly granted: View Channel, Send Messages, Manage Messages, Manage Channels. Without this, hiding a channel from `@everyone` locks the bot out too.
-3. **Existing role gating.** The server uses an onboarding question that assigns either `40+` or `underage`. The `40+` role is the access gate; `@everyone` has no channel access. Bot features that should require verified-age members use `@forty_plus_only()` (which checks for `40+`). The `underage` role needs no special handling - lacking `40+` is what gates access.
-4. **Privileged Gateway Intents.** Server Members Intent must be enabled in the Discord Developer Portal. Message Content Intent is currently **off** and should remain off unless a future cog genuinely needs to read message text.
+3. **Existing role gating.** The server uses an onboarding question that assigns either `40+` or `underage`. The `40+` role is the access gate; `@everyone` has no channel access. Bot features that should require verified-age members use `requireFortyPlus(interaction)` (which checks for `40+`). The `underage` role needs no special handling - lacking `40+` is what gates access.
+4. **Privileged Gateway Intents.** Server Members Intent must be enabled in the Discord Developer Portal. Message Content Intent is currently **off** and should remain off unless a future module genuinely needs to read message text.
 
 ---
 
@@ -415,15 +411,15 @@ If you (Claude Code) hit one of these while building, surface it to the operator
 
 ## 12. How to extend
 
-When adding a new cog:
+When adding a new module:
 
-1. Create `cogs/<name>.py`.
-2. Use `core/` helpers (`db.connect()`, `config.load()`, `get_scheduler()`, `permissions.*`).
-3. Use the appropriate existing DB tables. Only extend `core/db.py` if a column is genuinely missing.
-4. Add the cog path to `INITIAL_COGS` in `bot.py`.
+1. Create `src/modules/<name>.ts` exporting a default `BotModule`.
+2. Use `src/core/` helpers (`getDb()`, `loadSettings()`, `addJob()`, `requireModerator()` / `requireFortyPlus()`, `isModerator()` / `isAdmin()` / `isFortyPlus()`).
+3. Use the appropriate existing DB tables. Only extend the `SCHEMA` array in `src/core/db.ts` if a column is genuinely missing.
+4. Add the module to the `MODULES` array in `src/bot.ts`.
 5. Add any new YAML config under a top-level key matching the feature (e.g. `daily_prompt:`).
-6. Add new env vars to `.env.example` and to `Settings` in `core/config.py` if they're sensitive/operational.
-7. Update this spec's roadmap section to mark the cog implemented.
+6. Add new env vars to `.env.example` and to the `Settings` interface in `src/core/config.ts` if they're sensitive/operational.
+7. Update this spec's roadmap section to mark the module implemented.
 8. Update `README.md`'s "What it does" list.
 
-When in doubt, match the patterns in `cogs/scheduler.py` and `core/`.
+When in doubt, match the patterns in `src/modules/scheduler.ts` and `src/core/`.

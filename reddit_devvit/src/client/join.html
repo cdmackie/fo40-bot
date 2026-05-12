@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, width=device-width, height=device-height, user-scalable=0"
+    />
+    <link rel="stylesheet" type="text/css" href="join.css" />
+    <title>Join the FriendsOver40 Discord</title>
+  </head>
+  <body class="app">
+    <main class="card">
+      <p class="lede">
+        We have a Discord server operated by the mods of FriendsOver40 and
+        FriendsOver50.
+      </p>
+      <p class="lede">
+        Click below to get your personal invite. We automatically link
+        your Reddit identity so the mods know you're one of us.
+      </p>
+      <button class="primary" id="join-button" type="button">
+        Get Discord invite
+      </button>
+      <p class="hint">One-time use - expires in 10 minutes</p>
+      <p class="note">
+        Reddit will ask you if you want to continue to an external site -
+        that's normal. The link goes to friendsover40.online, the domain
+        of our Reddit/Discord bot run by the mods, which links up your
+        account and creates your personal Discord server invite.
+      </p>
+      <p class="error" id="error" hidden></p>
+    </main>
+    <script type="module" src="join.ts" defer></script>
+  </body>
+</html>

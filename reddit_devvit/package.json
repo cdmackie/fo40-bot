@@ -1,19 +1,31 @@
 {
   "name": "fo40-bridge",
-  "version": "0.0.0",
-  "description": "Devvit app: relays r/FriendsOver40 modlog bans and Discord-link verifications to a Discord webhook.",
+  "version": "0.1.0",
+  "description": "Devvit app: relays r/FriendsOver40 modlog bans and Discord-link verifications to the FriendsOver40 Discord bot.",
   "license": "BSD-3-Clause",
   "private": true,
+  "type": "module",
   "scripts": {
-    "build": "devvit build",
-    "upload": "devvit upload",
-    "playtest": "devvit playtest"
+    "build": "vite build",
+    "dev": "devvit playtest",
+    "deploy": "npm run type-check && devvit upload",
+    "launch": "npm run deploy && devvit publish",
+    "login": "devvit login",
+    "type-check": "tsc --build"
+  },
+  "engines": {
+    "node": ">=22.2.0"
   },
   "dependencies": {
-    "@devvit/public-api": "0.12.22"
+    "@devvit/start": "0.12.23",
+    "@devvit/web": "0.12.23",
+    "@hono/node-server": "^1.19.9",
+    "devvit": "0.12.23",
+    "hono": "4.11.7"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
-  },
-  "type": "module"
+    "@types/node": "^22.19.7",
+    "typescript": "5.9.3",
+    "vite": "7.3.1"
+  }
 }

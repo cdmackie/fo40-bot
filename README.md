@@ -113,20 +113,23 @@ fo40-bot/
 ├── .env                  # secrets, IDs (gitignored)
 ├── .env.example          # template
 ├── data/bot.db           # SQLite, persistent
-└── reddit_devvit/        # companion Devvit app (TypeScript) - see its README
-    ├── devvit.yaml
+└── reddit_devvit/        # companion Devvit Web app (TypeScript) - see its README
+    ├── devvit.json
     ├── package.json
-    └── src/main.tsx
+    └── src/
+        ├── client/         # webview HTML/TS/CSS for the join post
+        ├── server/         # Hono server (triggers, menu, API)
+        └── shared/
 ```
 
-Each feature is a cog in `cogs/`. Cogs are independently loadable - disable one by removing it from `INITIAL_COGS` in `bot.py`.
+Each feature is a module in `src/modules/`. Modules are independently loadable - disable one by removing it from the `MODULES` array in `src/bot.ts`.
 
 ## Operational notes
 
 - **`friends-bot` role placement matters.** The `friends-bot` role must be above `@everyone` and have explicit allow on managed channels, or the bot will lock itself out when hiding channels.
 - **Don't grant Administrator.** Too much blast radius if the token leaks. Grant only the listed permissions.
-- **Timezones.** Cron schedules in `config.yaml` use the `timezone` field per entry. The codebase uses `zoneinfo` (Python 3.9+).
-- **Schema changes.** `core/db.py` runs idempotent CREATE statements on startup. For real schema changes later, add a migrations table and version-gated ALTERs.
+- **Timezones.** Cron schedules in `config.yaml` use the `timezone` field per entry. The codebase uses `croner` for scheduling, which accepts standard IANA timezone names.
+- **Schema changes.** `src/core/db.ts` runs idempotent `CREATE TABLE IF NOT EXISTS` statements on startup. For real schema changes later, add a migrations table and version-gated ALTERs.
 - **Logs.** Container logs are JSON-rotated at 10MB × 3 files via `docker-compose.yml`. Tail with `docker compose logs -f`.
 
 ## Design rationale
@@ -135,7 +138,7 @@ See [`SPEC.md`](SPEC.md) - the source of truth for what the bot does, why, and w
 
 ## Companion Devvit app
 
-The Reddit-side functionality (ban-sync + Reddit identity verification) is provided by a small TypeScript Devvit app in [`reddit_devvit/`](reddit_devvit/). It is uploaded to Reddit and runs sandboxed there; it is not part of this Python project's runtime. See its README for setup, deployment, and the privacy/terms documents required for App Review.
+The Reddit-side functionality (ban-sync + Reddit identity verification) is provided by a small TypeScript [Devvit Web](https://developers.reddit.com/docs/capabilities/devvit-web/devvit_web_overview) app in [`reddit_devvit/`](reddit_devvit/). It is uploaded to Reddit and runs sandboxed there; it is not part of this Node project's runtime. See its README for setup, deployment, and the privacy/terms documents required for App Review.
 
 ## License
 
