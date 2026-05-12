@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
 import type { UiResponse } from '@devvit/web/shared';
-import { context, EntrypointHeight, reddit, settings } from '@devvit/web/server';
-import { postWebhook } from '../core/webhook';
+import {
+  context,
+  EntrypointHeight,
+  reddit,
+  scheduler,
+  settings,
+} from '@devvit/web/server';
 
 function describeError(err: unknown): string {
   if (err instanceof Error) {
@@ -73,44 +78,23 @@ menu.post('/sync-banned', async (c) => {
     });
   }
 
-  let sent = 0;
-  let errors = 0;
+  // Doing the iteration inline blows past Reddit's outbound-fetch throttle
+  // on subs with more than a handful of bans. Punt to a scheduled task so
+  // it can pace itself and the menu can return immediately.
   try {
-    const bannedListing = reddit.getBannedUsers({ subredditName, limit: 1000 });
-    for await (const banned of bannedListing) {
-      try {
-        await postWebhook(
-          webhookUrl,
-          '[fo40-bridge] ban',
-          [
-            { name: 'reddit_username', value: banned.username, inline: true },
-            { name: 'moderator', value: '(bulk sync)', inline: true },
-            {
-              name: 'reason',
-              value: '(bulk sync from banned-users list)',
-              inline: false,
-            },
-          ],
-          0xe74c3c,
-        );
-        sent += 1;
-      } catch (err) {
-        console.error(
-          `[fo40-bridge] sync: failed to relay ban for u/${banned.username}:`,
-          err,
-        );
-        errors += 1;
-      }
-    }
+    await scheduler.runJob({
+      name: 'sync-banned',
+      runAt: new Date(),
+    });
   } catch (err) {
-    console.error('[fo40-bridge] sync: failed to list banned users:', err);
+    console.error('[fo40-bridge] failed to schedule sync-banned job:', err);
     return c.json<UiResponse>({
-      showToast: `Couldn't list banned users: ${describeError(err).slice(0, 200)}`,
+      showToast: `Failed to schedule bulk sync: ${describeError(err).slice(0, 200)}`,
     });
   }
 
-  console.log(`[fo40-bridge] bulk sync: ${sent} sent, ${errors} errors`);
   return c.json<UiResponse>({
-    showToast: `Bulk sync done: ${sent} ban events sent (${errors} errors).`,
+    showToast:
+      'Bulk sync started. Ban events will appear in the bridge channel over the next couple of minutes.',
   });
 });

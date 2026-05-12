@@ -85,6 +85,7 @@ Hot-reloads on every save (uses `vite build --watch` per `devvit.json`'s `script
 - `src/server/index.ts` - Hono entrypoint, mounts `/api/*` and `/internal/*` routes
 - `src/server/routes/triggers.ts` - `onModAction` handler (ban/unban relay)
 - `src/server/routes/menu.ts` - "Create Discord-join post" and "Sync banned users" menu actions
+- `src/server/routes/scheduler.ts` - bulk-sync-banned background task (paced + batched to dodge Reddit's outbound-fetch throttle)
 - `src/server/routes/api.ts` - `POST /api/join-token` called by the webview button
 - `src/server/core/` - HMAC signing, Discord webhook, Redis dedup
 - `src/client/join.{html,ts,css}` - the join post webview rendered inside Reddit's iframe

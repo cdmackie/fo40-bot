@@ -48,6 +48,13 @@
   "triggers": {
     "onModAction": "/internal/triggers/mod-action"
   },
+  "scheduler": {
+    "tasks": {
+      "sync-banned": {
+        "endpoint": "/internal/scheduler/sync-banned"
+      }
+    }
+  },
   "menu": {
     "items": [
       {
