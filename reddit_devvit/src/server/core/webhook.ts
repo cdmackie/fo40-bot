@@ -13,7 +13,7 @@ export async function postWebhook(
   fields: WebhookField[],
   color: number,
 ): Promise<void> {
-  await fetch(webhookUrl, {
+  const resp = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -27,6 +27,11 @@ export async function postWebhook(
       ],
     }),
   });
+  if (!resp.ok) {
+    throw new Error(
+      `Discord webhook returned ${resp.status} ${resp.statusText}`,
+    );
+  }
 }
 
 // Send multiple embeds in a single webhook call. Discord accepts up to 10

@@ -15,10 +15,12 @@ export const schedulerRoutes = new Hono();
 // requests"), so cutting call volume 10x is the biggest single win.
 const EMBEDS_PER_CALL = 10;
 
-// Sleep between batch calls. Combined with batching, ~30 banned users/sec
-// throughput - well under any reasonable rate limit, and a 1000-user list
-// finishes in ~100s.
-const BATCH_DELAY_MS = 1000;
+// Sleep between batch calls. Conservative because Reddit's outbound-HTTP
+// throttle isn't publicly documented and over-eager pacing put the app in
+// a sustained penalty box during initial testing. At 5s/batch a 300-user
+// list finishes in ~150s; a 1000-user list in ~500s. Both are fine for a
+// background job.
+const BATCH_DELAY_MS = 5_000;
 
 function buildBanEmbed(redditUsername: string): WebhookEmbed {
   return {
