@@ -17,10 +17,10 @@
     "node": ">=22.2.0"
   },
   "dependencies": {
-    "@devvit/start": "0.12.23",
-    "@devvit/web": "0.12.23",
+    "@devvit/start": "^0.12.24-next-2026-05-12-20-08-57-3c0bd81b2.0",
+    "@devvit/web": "^0.12.24-next-2026-05-12-20-08-57-3c0bd81b2.0",
     "@hono/node-server": "^1.19.9",
-    "devvit": "0.12.23",
+    "devvit": "^0.12.24-next-2026-05-12-20-08-57-3c0bd81b2.0",
     "hono": "4.11.7"
   },
   "devDependencies": {
